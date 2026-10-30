@@ -3,7 +3,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 const [root, out] = process.argv.slice(2);
-const mods = ['data', 'world', 'quests', 'tutorial', 'workshop', 'factory', 'trade'];
+const mods = ['data', 'world', 'quests', 'tutorial', 'workshop', 'factory', 'trade', 'cooking'];
 const all = {};
 for (const f of mods) {
   const m = await import(resolve(root, 'src', f + '.js'));

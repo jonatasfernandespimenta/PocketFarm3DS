@@ -175,7 +175,7 @@ int comfort(J *s);
 int comfortBonus(J *s);
 int maxEnergy(J *s);
 int count(J *s, const char *id);
-void give(J *s, const char *id, int n);
+int give(J *s, const char *id, int n);   // returns how many overflowed into s.overflow
 bool take(J *s, const char *id, int n);
 bool canAfford(J *s, J *cost);
 bool pay(J *s, J *cost);
@@ -304,3 +304,65 @@ bool writeFile(const char *path, const char *data, size_t len);
 void plog(const char *fmt, ...);
 double profNow(void);    // ms
 bool plat_debug(void);   // sdmc:/3ds/PocketFarm/debug exists (PF_DEBUG on the PC)
+
+// ---- port industrial: lead (UI) ----
+enum { BUY_TECH = 40, BUY_DRONE, BUY_BAG, BUY_CRAFT };   // extra shops_costRow actions (shops.c buyClick)
+typedef struct Row Row;
+Row *shops_costRow(const char *icon, const char *label, const char *sub, J *cost, bool can, const char *why, int act, const char *id);
+void game_buyAction(int act, const char *id);   // game.c: BUY_TECH "home|tech", BUY_DRONE dock id
+void shops_storeMenu(J *m);                     // the counter inside a warehouse
+void shops_inboxMenu(void);                     // what didn't fit in the backpack
+
+// ---- port industrial: B ----
+// systems.c
+const char *animalMap(J *s, J *a);                 // "farm" or the building's interior id
+bool isGranja(J *s, const char *home);
+int capacity(J *s, const char *home);
+const char *installTech(J *s, const char *home, const char *tech, bool paid);   // error or NULL
+const char *eat(J *s, const char *id);             // error or NULL
+double industryTarget(J *s);
+int industryBand(J *s);
+double priceMult(J *s);
+int animalPrice(J *s, const char *kind);
+J *newDayRand(J *s, double (*rand)(void));         // newDay(state, rand); NULL rand = Math.random
+// quests.c
+bool questOpen(J *s, const char *id);
+
+// ---- port industrial: A (state.c inventory, factory.c, cooking.c) ----
+#define BAG_SLOTS 24
+#define STACK 99
+int slotsUsed(J *s);
+int room(J *s, const char *id);            // INT_MAX for factory pieces (they don't take backpack space)
+int countAll(J *s, const char *id);        // backpack + every warehouse
+bool takeAll(J *s, const char *id, int n);
+// factory.c
+#define SUPPLY_RANGE 3
+#define MAX_DRONES 3
+#define DOCK_CAP 40
+#define FEEDER_CAP 60
+#define COLLECTOR_CAP 40
+// rows(type): footprint height. A function-like macro, so file-scope `rows` arrays elsewhere (hud.c, terrain.c) don't clash.
+int machineRows(const char *type);
+#define rows(type) machineRows(type)
+int cells(J *m, Tile *out, int max);
+const char *storeFor(const char *item);
+int stored(J *m);
+bool canPickUp(J *m);
+void ageCellars(J *s);
+const char *machineIssue(J *s, J *m, char *text, int n);   // code ("nopower", "nofuel", "full", "refused", "blocked", "idle") or NULL
+void growVines(J *s, bool isFall);
+int harvestVine(J *s, J *m);               // grapes go to the backpack
+J *droneCost(void);                        // DRONE_COST: { iron_bar, copper_bar, money }
+J *newDrone(J *dock);
+int powerNodes(J *s, J **out, int max);
+// cooking.c
+int addInput(J *s, J *m, const char *id);
+int stationQueued(J *m);
+const char *work(J *s, J *m, double *progress);
+bool mix(J *s, J *m);
+const char *startCook(J *s, J *m, const char *id);
+const char *cookState(J *s, J *m);
+int minutesLeft(J *s, J *m);
+const char *collectCooked(J *s, J *m);
+bool bottle(J *s, J *m);
+J *stationContents(J *m);

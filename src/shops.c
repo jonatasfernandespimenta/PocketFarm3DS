@@ -59,8 +59,14 @@ static int haveOf(const char *k) { return eq(k, "money") ? num(state, "money") :
 
 // Friendship discount (10% off coins) for the shop currently open.
 static const char *shop;
+// Village prices rise with industrialization (priceMult), then the friendship discount.
+static int innPrice(J *f);
 static Cost withDiscount(Cost c) {
-    if (shop && hasDiscount(state, shop)) for (int i = 0; i < c.nc; i++) if (eq(c.c[i].k, "money") && c.c[i].n) c.c[i].n = jround(c.c[i].n * 0.9);
+    for (int i = 0; i < c.nc; i++) if (eq(c.c[i].k, "money") && c.c[i].n) {
+        double v = c.c[i].n * priceMult(state);
+        if (shop && hasDiscount(state, shop)) v *= 0.9;
+        c.c[i].n = jround(v);
+    }
     return c;
 }
 
@@ -88,6 +94,9 @@ static bool buyClick(void *arg) {
     case B_BUILDING: setbool(child(s, "buildings"), b->id, true); game_onBuilt(b->id); toast("%s is ready on the farm!", str(jget(T("BUILDINGS"), b->id), "name")); break;
     case B_HOUSE: { J *h = child(s, "house"); setnum(h, "level", num(h, "level") + 1); toast("House renovated! Go in and see."); game_onHouse(); break; }
     case B_UPGRADE: setbool(child(s, "upgrades"), b->id, true); break;
+    case BUY_BAG: setnum(s, "bag", num(s, "bag") + 12); break;
+    case BUY_CRAFT: { char k[40]; snprintf(k, sizeof k, "machine_%s", b->id); give(s, k, 1); if (!str(s, "build")) setstr(s, "build", b->id); refreshTools(); break; }
+    default: game_buyAction(b->act, b->id); break;   // BUY_TECH ("home|tech"), BUY_DRONE (dock id)
     }
     sfx("coin"); changed();
     return true;
@@ -117,6 +126,11 @@ static Row *buyRow(const char *icon, const char *label, const char *sub, Cost co
     if (price >= 0) row_price(r, price);
     if (!ok) row_disabled(r);
     return r;
+}
+
+// A cost row for menus outside the shops (farm tech, drones, crafting): pays, then runs the BUY_* action.
+Row *shops_costRow(const char *icon, const char *label, const char *sub, J *cost, bool can, const char *why, int act, const char *id) {
+    return buyRow(icon, label, sub, costOf(cost), can, why, act, id, 1);
 }
 
 // ---------- shipping ----------
@@ -193,6 +207,12 @@ void shops_marketMenu(void) {
     char sub[80]; snprintf(sub, sizeof sub, "1 per animal per night · have %d", count(s, "feed"));
     buyRow("item:feed", "Feed", sub, money(15), true, NULL, B_GIVE, "feed", 1);
     buyRow("item:feed", "Feed ×10", NULL, money(140), true, NULL, B_GIVE, "feed", 10);
+    // cooking supplies and the grape vine, as their quests open
+    J *vine = jget(T("MACHINES"), "vine");
+    if (questOpen(s, "wine")) { char vs[200]; snprintf(vs, sizeof vs, "%s · place it with Build", str(vine, "desc")); buyRow("item:machine_vine", str(vine, "name"), vs, costOf(jget(vine, "cost")), true, NULL, B_MACHINE, "vine", 1); }
+    if (questOpen(s, "bread")) buyRow("item:bucket", itemName("bucket"), "fill it at any pond, river or the well: water for bread dough", money(120), !count(s, "bucket"), "you already have one", B_GIVE, "bucket", 1);
+    if (questOpen(s, "wine")) { char l[48]; snprintf(l, sizeof l, "%s ×5", itemName("bottle")); buyRow("item:bottle", l, NULL, money(40), true, NULL, B_GIVE, "bottle", 5); snprintf(l, sizeof l, "%s ×10", itemName("cork")); buyRow("item:cork", l, NULL, money(30), true, NULL, B_GIVE, "cork", 10); }
+    if (questOpen(s, "bread")) { char l[48]; snprintf(l, sizeof l, "%s ×5", itemName("rennet")); buyRow("item:rennet", l, "for making cheese on the stove", money(60), true, NULL, B_GIVE, "rennet", 5); }
     row_stay(menu_row("Sell crops and goods", NULL, toMarketSell, NULL, 0));
     menu_row("Close", NULL, NULL, NULL, 0);
     menu_refresh(marketRefresh, NULL, 0);
@@ -256,9 +276,22 @@ void shops_forgeMenu(void) {
     if (tier) menu_text("Machines — stage %d/4: %s (place them on the farm with the Build tool):", tier, TIER_NAMES[tier < 5 ? tier : 4]);
     else menu_text("Mike: \"Machines are serious business. Once your farm has a Coop, we'll talk.\" (Mike's quests unlock machines)");
     if (tier) { Row *r = menu_row("Workshop", "factory challenges, parts on Mike", toWorkshop, NULL, 0); row_icon(r, "wrench"); row_stay(r); }
-    JFOR(m, T("MACHINES")) {
-        if (num(m, "tier") > tier) continue;
-        const char *id = m->string;
+    // by group (MACHINE_GROUPS), with the pieces their quests haven't opened yet left out
+    static const char *LOCK[][2] = { { "dock", "drones" }, { "emill", "auto" }, { "kneader", "auto" }, { "ioven", "auto" }, { "bottler", "auto" }, { "cheesemaker", "auto" } };
+    J *list[64]; int nl = 0;
+    JFOR(g, T("MACHINE_GROUPS")) JFOR(e, jat(g, 1)) {
+        J *m = jget(T("MACHINES"), e->valuestring);
+        if (!m || num(m, "tier") > tier || str(m, "shop") || nl >= 64) continue;
+        bool locked = false;
+        for (size_t i = 0; i < sizeof LOCK / sizeof *LOCK; i++) if (eq(m->string, LOCK[i][0]) && !questOpen(s, LOCK[i][1])) locked = true;
+        if (!locked) list[nl++] = m;
+    }
+    const char *group = NULL;
+    for (int li = 0; li < nl; li++) {
+        J *m = list[li];
+        const char *id = m->string, *gname = NULL;
+        JFOR(g, T("MACHINE_GROUPS")) JFOR(e, jat(g, 1)) if (eq(e->valuestring, id)) gname = jat(g, 0)->valuestring;
+        if (gname && (!group || !eq(gname, group))) { menu_text("— %s —", gname); group = gname; }
         char icon[48], label[80];
         snprintf(icon, sizeof icon, "item:machine_%s", id);
         if (num(m, "gives")) snprintf(label, sizeof label, "%s ×%d", str(m, "name"), (int)num(m, "gives"));
@@ -294,7 +327,14 @@ void shops_carpenterMenu(void) {
         if (has(jget(s, "buildings"), b->string)) continue;
         buyRow(NULL, str(b, "name"), eq(b->string, "coop") ? "For chickens" : "For cows and sheep", costOf(jget(b, "cost")), true, NULL, B_BUILDING, b->string, 0);
     }
-    int maxPer = num(DATA, "MAX_PER_HOME");
+    // the workbench with 'bread', the silo when 'storage' opens, the other warehouses once it's done
+    JFOR(m, T("MACHINES")) {
+        if (!eq(str(m, "shop"), "carpenter")) continue;
+        const char *id = m->string;
+        if (eq(id, "workbench") ? !questOpen(s, "bread") : eq(id, "silo") ? !questOpen(s, "storage") : !has(jget(jget(s, "quests"), "done"), "storage")) continue;
+        char icon[48], sub[240]; snprintf(icon, sizeof icon, "item:machine_%s", id); snprintf(sub, sizeof sub, "%s · place it with Build", str(m, "desc"));
+        buyRow(icon, str(m, "name"), sub, costOf(jget(m, "cost")), true, NULL, B_MACHINE, id, 1);
+    }
     JFOR(a, T("ANIMALS")) {
         const char *homeId = str(a, "home");
         J *home = jget(T("BUILDINGS"), homeId);
@@ -303,10 +343,10 @@ void shops_carpenterMenu(void) {
         char label[64], sub[120];
         snprintf(label, sizeof label, "Buy %s", str(a, "name"));
         if (!built) snprintf(sub, sizeof sub, "needs %s", str(home, "name"));
-        else snprintf(sub, sizeof sub, "%s: %d/%d · gives %s", str(home, "name"), n, maxPer, itemName(str(a, "product")));
+        else snprintf(sub, sizeof sub, "%s: %d/%d · gives %s", str(home, "name"), n, capacity(s, homeId), itemName(str(a, "product")));
         Row *r = menu_row(label, sub, buyAnimalRow, a->string, strlen(a->string) + 1);
-        row_price(r, num(a, "price"));
-        if (!built || n >= maxPer || num(s, "money") < num(a, "price")) row_disabled(r);
+        row_price(r, animalPrice(s, a->string));
+        if (!built || n >= capacity(s, homeId) || num(s, "money") < animalPrice(s, a->string)) row_disabled(r);
     }
     int level = num(jget(s, "house"), "level");
     J *next = jat(T("HOUSE_LEVELS"), level + 1);
@@ -322,6 +362,9 @@ void shops_carpenterMenu(void) {
         if (has(jget(s, "upgrades"), u->string)) continue;
         buyRow(NULL, str(u, "name"), str(u, "desc"), costOf(jget(u, "cost")), true, NULL, B_UPGRADE, u->string, 0);
     }
+    int bagStep = (num(s, "bag") - BAG_SLOTS) / 12;
+    J *bagCost = jat(T("BAG_UPGRADES"), bagStep);
+    if (bagCost) { char sub[60]; snprintf(sub, sizeof sub, "%d → %d slots", (int)num(s, "bag"), (int)num(s, "bag") + 12); buyRow(NULL, "Bigger backpack", sub, costOf(bagCost), true, NULL, BUY_BAG, NULL, 0); }
     buyRow("item:wood", "Wood ×10", NULL, money(60), true, NULL, B_GIVE, "wood", 10);
     buyRow("item:feed", "Feed ×10", NULL, money(140), true, NULL, B_GIVE, "feed", 10);
     menu_row("Close", NULL, NULL, NULL, 0);
@@ -332,7 +375,7 @@ void shops_carpenterMenu(void) {
 static bool buyFurniture(void *arg) {
     const char *id = arg;
     J *s = state, *d = child(s, "decor");
-    setnum(s, "money", num(s, "money") - num(jget(T("FURNITURE"), id), "price"));
+    setnum(s, "money", num(s, "money") - innPrice(jget(T("FURNITURE"), id)));
     setnum(d, id, num(d, id) + 1);
     sfx("coin"); changed();
     return true;
@@ -354,8 +397,8 @@ static void furnitureShop(void) {
         Row *r = menu_row(str(f, "name"), sub, buyFurniture, id, strlen(id) + 1);
         if (str(f, "pixel")) snprintf(icon, sizeof icon, "sprite:%s", str(f, "pixel")); else snprintf(icon, sizeof icon, "furniture:%s", id);
         row_icon(r, icon);
-        row_price(r, num(f, "price"));
-        if (num(s, "money") < num(f, "price")) row_disabled(r);
+        row_price(r, innPrice(f));
+        if (num(s, "money") < innPrice(f)) row_disabled(r);
     }
     back("Back", toCarpenter);
     menu_refresh(furnitureRefresh, NULL, 0);
@@ -469,24 +512,32 @@ void shops_boardMenu(void) {
 // ---------- player menus ----------
 static bool toMain(void *a) { shops_mainMenu(); return false; }
 static bool bagGroup(int g, const char *id) {
-    static const char *PRODUCTS[] = { "egg", "milk", "wool", "cheese", "mayo", "yarn", "bread", "sauce", "feed" };
+    static const char *PRODUCTS[] = { "egg", "milk", "wool", "mayo", "yarn", "sauce", "feed", "grape" };
+    static const char *KITCHEN[] = { "flour", "dough", "kneaded", "water", "must", "bottle", "cork", "bottled_must", "rennet", "curd" };
     switch (g) {
     case 0: return starts(id, "seed_");
     case 1: return starts(id, "machine_");
-    case 2: { if (jget(T("CROPS"), id)) return true; for (int i = 0; i < 9; i++) if (eq(id, PRODUCTS[i])) return true; return false; }
-    case 3: return has(ITEM(id), "fish");
+    case 2: { if (jget(T("CROPS"), id)) return true; for (int i = 0; i < 8; i++) if (eq(id, PRODUCTS[i])) return true; return false; }
+    case 3: { if (jget(T("FOOD_ENERGY"), id)) return true; for (int i = 0; i < 10; i++) if (eq(id, KITCHEN[i])) return true; return false; }
+    case 4: return has(ITEM(id), "fish");
     }
     return true;
 }
 static bool equipAction(void *arg) { equip(arg); return false; }
+static void backpackMenu(void);
+static bool eatAction(void *arg) {
+    const char *id = arg, *err = eat(state, id);
+    if (err) toast("%s", err); else toast("Ate %s. +%d :energy:", itemName(id), (int)jget(T("FOOD_ENERGY"), id)->valuedouble);
+    changed(); backpackMenu(); return false;
+}
 static void backpackMenu(void) {
     J *s = state, *inv = jget(s, "inv");
-    static const char *TITLES[] = { "Seeds", "Machines", "Crops & goods", "Fish", "Materials & nature" };
+    static const char *TITLES[] = { "Seeds", "Machines", "Crops & goods", "Food & kitchen", "Fish", "Materials & nature" };
     const char *ids[128]; int n = 0;
     JFOR(e, inv) if (numv(e) > 0 && ITEM(e->string) && n < 128) ids[n++] = e->string;
     bool used[128] = { 0 }, any = false;
     menu_begin(":bag: Backpack");
-    for (int g = 0; g < 5; g++) {
+    for (int g = 0; g < 6; g++) {
         bool titled = false;
         for (int i = 0; i < n; i++) {
             const char *id = ids[i];
@@ -510,6 +561,7 @@ static void backpackMenu(void) {
             char icon[48]; snprintf(icon, sizeof icon, "item:%s", id);
             menu_slot(icon, c, name, shortName, info, false);
             if (starts(id, "seed_") || starts(id, "machine_")) slot_action("Equip", equipAction, id, strlen(id) + 1);
+            else if (jget(T("FOOD_ENERGY"), id)) { char l[32]; snprintf(l, sizeof l, "Eat (+%d)", (int)jget(T("FOOD_ENERGY"), id)->valuedouble); slot_action(l, eatAction, id, strlen(id) + 1); }
         }
     }
     if (!any) menu_text("Backpack is empty.");
@@ -1013,6 +1065,23 @@ static void contractsMenu(void) {
 // Shown once when each factory stage unlocks (and when you tap the objective chip): a little scene + rules.
 // ponytail: the web's diagram rows are only a fallback for a missing Ponder scene; every guide has one.
 static const struct { const char *id, *title, *text[4]; } GUIDES[] = {
+    { "storage", "Factory · Warehouses", {
+        "Each warehouse keeps one kind of goods: Silo (grains and seeds), Cold Room (milk, eggs, fruit, vegetables, fish), Cellar (cheese, wine, preserves) and Shed (the rest).",
+        "Cargo goes in at the orange mouth (bottom left) and leaves through an arm next to the grey mouth (bottom right). The door is just for you: go in to see the stock and use the counter.",
+        "Building, buying and contracts use what's in your warehouses. To sell, bring it to your backpack." } },
+    { "sorter", "Factory · Sorter", {
+        "Tap the Sorter and pick a filter: that item turns to the green arrow's side, everything else goes straight on.",
+        "\"Side\" flips the arrow between left and right (facing the way the belt runs). One sorter per item you want off the line." } },
+    { "drones", "Factory · Drones", {
+        "Put the Drone Dock near power (solar panel, boiler or pole). Tap it and pick what each drone harvests; up to 3 drones per dock.",
+        "Drones bring the harvest to the dock and it pushes everything out the front: run a belt to the orange mouth of the Silo or Cold Room.",
+        "A full dock makes the drones wait. Drones don't plant or water: that's still on you." } },
+    { "granja", "Factory · Factory farm", {
+        "At the trough, inside the coop or barn, install the Automatic Feeder (takes feed by belt) and the Belt Collector (puts the products on a belt). The pieces show up outside the building.",
+        "Then the building is a factory farm: twice the animals, but they never go out in the sun again. Happiness drops every night and only petting raises it." } },
+    { "auto", "Factory · Automatic kitchen", {
+        "Every kitchen step has a machine: Electric Mill, Kneader, Industrial Oven, Bottler and Cheese Maker. They all need power.",
+        "Wine and cheese still age 3 nights in the Cellar: no machine speeds that up." } },
     { "machine", "Factory · First machines", {
         ":wrench: Machines come from the Forge and go on the farm with the Build tool (wrench). Tap it again to pick which machine.",
         "The way you face when placing it is the machine's output. You can rotate it later by tapping it.",
@@ -1212,6 +1281,10 @@ static J *questFor(const char *name) {
 static const char *npcLine(J *npc) {
     J *lines = jget(npc, "lines");
     const char *name = str(npc, "name");
+    // some villagers' tone changes as the farm industrializes (MOOD_LINES, bands 1–3); not during festivals
+    int band = industryBand(state);
+    J *mood = band && !isFestival(state) ? jat(jget(T("MOOD_LINES"), name), band - 1) : NULL;
+    if (jlen(mood)) lines = mood;
     return jat(lines, ((int)num(state, "day") + (int)strlen(name)) % jlen(lines))->valuestring;
 }
 
@@ -1360,7 +1433,7 @@ static void giftMenu(NpcArg a) {
 static bool boothBuy(void *arg) {
     const char *id = arg;
     J *s = state, *d = child(s, "decor");
-    setnum(s, "money", num(s, "money") - jround(num(jget(T("FURNITURE"), id), "price") * 0.7));
+    setnum(s, "money", num(s, "money") - jround(num(jget(T("FURNITURE"), id), "price") * 0.7 * priceMult(s)));
     setnum(d, id, num(d, id) + 1);
     sfx("coin"); changed();
     return true;
@@ -1372,7 +1445,7 @@ static void festivalBooth(void) {
     menu_text("%s: seasonal furniture 30%% off!", str(fest, "name"));
     JFOR(e, jget(fest, "decor")) {
         const char *id = e->valuestring;
-        int price = jround(num(jget(T("FURNITURE"), id), "price") * 0.7);
+        int price = jround(num(jget(T("FURNITURE"), id), "price") * 0.7 * priceMult(s));
         char label[96]; snprintf(label, sizeof label, "%s · %d", str(jget(T("FURNITURE"), id), "name"), price);
         Row *r = menu_row(label, NULL, boothBuy, id, strlen(id) + 1);
         if (num(s, "money") < price) row_disabled(r);
@@ -1479,8 +1552,9 @@ void shops_morningReport(J *log, J **goals, int ngoals) {
 }
 
 // ---------- machines (main.js machineMenu) ----------
-static const char *NO_DIR[] = { "chest", "autosell", "sprinkler", "solar", "pole", "steam" };
-static bool noDir(const char *t) { for (int i = 0; i < 6; i++) if (eq(t, NO_DIR[i])) return true; return false; }
+static const char *NO_DIR[] = { "chest", "autosell", "sprinkler", "solar", "pole", "steam", "silo", "cold", "cellar", "shed",
+                                "workbench", "mill", "kitchen", "oven", "stove", "tub", "press", "vine" };
+static bool noDir(const char *t) { for (size_t i = 0; i < sizeof NO_DIR / sizeof *NO_DIR; i++) if (eq(t, NO_DIR[i])) return true; return false; }
 static const char *dirName(const char *d) { return eq(d, "up") ? "up" : eq(d, "down") ? "down" : eq(d, "left") ? "left" : "right"; }
 typedef struct { J *m; char id[24]; } MArg;
 static bool coalRow(void *arg) {
@@ -1489,6 +1563,156 @@ static bool coalRow(void *arg) {
     changed();
     return true;
 }
+// ---- warehouses, granja ports, docks and sorters (fase 2–6) ----
+static bool pickUpRow(void *arg); static bool takeOutRow(void *arg); static void machineRefresh(void *arg);
+static void issueText(J *m) { char t[200]; if (machineIssue(state, m, t, sizeof t)) menu_text(":warning: %s", t); }
+static bool outFilterPick(void *arg) { MArg *a = arg; if (a->id[0]) setstr(a->m, "outFilter", a->id); else delkey(a->m, "outFilter"); changed(); machineMenu(a->m); return false; }
+static void outFilterMenu(J *m) {   // what a warehouse hands out at its grey port: anything it keeps, or everything
+    MArg a = { m, "" };
+    menu_begin("What leaves the grey port?");
+    Row *r = menu_row("Everything, in the order it came", str(m, "outFilter") ? NULL : "chosen", outFilterPick, &a, sizeof a); row_stay(r);
+    const char *type = str(m, "type");
+    JFOR(it, T("ITEMS")) {
+        const char *id = it->string;
+        if (starts(id, "machine_") || !eq(storeFor(id), type) || (!num(it, "sell") && !num(jget(m, "stock"), id))) continue;
+        snprintf(a.id, sizeof a.id, "%s", id);
+        char sub[60]; snprintf(sub, sizeof sub, "%d in stock%s", (int)num(jget(m, "stock"), id), eq(str(m, "outFilter"), id) ? " · chosen" : "");
+        r = menu_row(itemName(id), sub, outFilterPick, &a, sizeof a); iconItem(r, id); row_stay(r);
+    }
+    menu_end();
+}
+static bool outFilterRow(void *arg) { outFilterMenu(((MArg *)arg)->m); return false; }
+static void storeMachineMenu(J *m) {
+    J *def = mdef(m);
+    MArg a = { m, "" };
+    menu_begin(str(def, "name"));
+    issueText(m);
+    Sb st = { 0 };
+    JFOR(k, jget(m, "stock")) { if (st.n) sb(&st, ", "); sb(&st, "%d %s", (int)numv(k), itemName(k->string)); }
+    char first[160]; snprintf(first, sizeof first, "%s", str(def, "desc")); char *dot = strchr(first, '.'); if (dot) *dot = 0;
+    menu_text("%s. Stock (%d/%d): %s.", first, stored(m), (int)num(def, "cap"), st.n ? st.b : "empty");
+    menu_text("Cargo goes in at the orange mouth (bottom left) and leaves through an arm at the grey one (bottom right). Go in through the door to store and take by hand.");
+    char label[80]; snprintf(label, sizeof label, "Output: %s", str(m, "outFilter") ? itemName(str(m, "outFilter")) : "everything, in order");
+    Row *r = menu_row(label, "tap to choose what leaves the grey port", outFilterRow, &a, sizeof a);
+    if (str(m, "outFilter")) iconItem(r, str(m, "outFilter"));
+    if (canPickUp(m)) menu_row("Put in backpack", NULL, pickUpRow, &a, sizeof a);
+    else menu_text("Empty it before putting it in your backpack.");
+    menu_row("Close", NULL, NULL, NULL, 0);
+    menu_refresh(machineRefresh, &a, sizeof a);
+    menu_end();
+}
+static bool feederFillRow(void *arg) { J *m = ((MArg *)arg)->m; while (count(state, "feed") && accepts(m, "feed")) { take(state, "feed", 1); insert(state, m, "feed"); } changed(); return true; }
+static void fixedMachineMenu(J *m) {   // a granja's feeder / collector: part of the building
+    J *def = mdef(m);
+    MArg a = { m, "" };
+    menu_begin(str(def, "name"));
+    issueText(m);
+    if (eq(str(m, "type"), "feeder")) menu_text("%s · %d/60. It belongs to the building: it can't be moved.", str(def, "desc"), (int)num(m, "feed"));
+    else menu_text("%s · %d waiting. It belongs to the building: it can't be moved.", str(def, "desc"), jlen(jget(m, "out")));
+    char sub[40];
+    if (eq(str(m, "type"), "feeder") && count(state, "feed")) { snprintf(sub, sizeof sub, "you have %d", count(state, "feed")); Row *r = menu_row("Add feed", sub, feederFillRow, &a, sizeof a); iconItem(r, "feed"); }
+    if (jlen(jget(m, "out"))) { char l[40]; snprintf(l, sizeof l, "Take %d", jlen(jget(m, "out"))); menu_row(l, NULL, takeOutRow, &a, sizeof a); }
+    menu_row("Close", NULL, NULL, NULL, 0);
+    menu_refresh(machineRefresh, &a, sizeof a);
+    menu_end();
+}
+typedef struct { J *m; int drone; char id[24]; } DArg;
+static bool droneTargetPick(void *arg) {
+    DArg *a = arg; J *d = jat(jget(a->m, "drones"), a->drone);
+    if (a->id[0]) setstr(d, "target", a->id); else setstr(d, "target", NULL);
+    setstr(d, "claim", NULL); changed(); machineMenu(a->m); return false;
+}
+static bool droneMenuRow(void *arg) {
+    DArg a = *(DArg *)arg;
+    menu_begin("What should it harvest?");
+    Row *r;
+    JFOR(c, T("CROPS")) { snprintf(a.id, sizeof a.id, "%s", c->string); r = menu_row(str(c, "name"), NULL, droneTargetPick, &a, sizeof a); iconItem(r, c->string); row_stay(r); }
+    snprintf(a.id, sizeof a.id, "grape"); r = menu_row(itemName("grape"), NULL, droneTargetPick, &a, sizeof a); iconItem(r, "grape"); row_stay(r);
+    a.id[0] = 0; r = menu_row("Nothing (stays at the dock)", NULL, droneTargetPick, &a, sizeof a); row_stay(r);
+    menu_end();
+    return false;
+}
+static bool sorterSideRow(void *arg) { J *m = ((MArg *)arg)->m; setstr(m, "side", eq(str(m, "side"), "right") ? "left" : "right"); changed(); return true; }
+static bool sorterPick(void *arg) { MArg *a = arg; if (a->id[0]) setstr(a->m, "filter", a->id); else setstr(a->m, "filter", NULL); changed(); machineMenu(a->m); return false; }
+static bool sorterFilterRow(void *arg) {
+    MArg a = *(MArg *)arg;
+    menu_begin("What turns to the side?");
+    a.id[0] = 0; Row *r = menu_row("Nothing", str(a.m, "filter") ? NULL : "chosen", sorterPick, &a, sizeof a); row_stay(r);
+    JFOR(it, T("ITEMS")) {
+        const char *id = it->string;
+        if (starts(id, "machine_") || starts(id, "seed_") || !num(it, "sell")) continue;
+        snprintf(a.id, sizeof a.id, "%s", id);
+        r = menu_row(itemName(id), eq(str(a.m, "filter"), id) ? "chosen" : NULL, sorterPick, &a, sizeof a); iconItem(r, id); row_stay(r);
+    }
+    menu_end();
+    return false;
+}
+
+// The counter inside a warehouse: take things out (as many as fit), store what this warehouse keeps.
+static bool counterTake(void *arg) {
+    MArg *a = arg; J *st = jget(a->m, "stock");
+    int n = (int)fmin(num(st, a->id), room(state, a->id));
+    if (!n) { toast("Your backpack is full."); return true; }
+    give(state, a->id, n); setnum(st, a->id, num(st, a->id) - n); if (!num(st, a->id)) delkey(st, a->id);
+    sfx("pop"); changed(); return true;
+}
+static bool counterStore(void *arg) {
+    MArg *a = arg; int n = 0;
+    while (count(state, a->id) && accepts(a->m, a->id)) { take(state, a->id, 1); insert(state, a->m, a->id); n++; }
+    if (!n) toast("%s is full.", str(mdef(a->m), "name")); else { sfx("pop"); changed(); }
+    return true;
+}
+static void counterRefresh(void *arg) { shops_storeMenu(((MArg *)arg)->m); }
+void shops_storeMenu(J *m) {
+    if (!m) return;
+    J *def = mdef(m);
+    MArg a = { m, "" };
+    char first[160]; snprintf(first, sizeof first, "%s", str(def, "desc")); char *dot = strchr(first, '.'); if (dot) *dot = 0;
+    menu_begin(str(def, "name"));
+    menu_text("%s: %d/%d. %s.", str(def, "name"), stored(m), (int)num(def, "cap"), first);
+    char l[80], sub[60]; Row *r;
+    JFOR(k, jget(m, "stock")) {
+        snprintf(a.id, sizeof a.id, "%s", k->string);
+        snprintf(l, sizeof l, "Take %s", itemName(k->string)); snprintf(sub, sizeof sub, "%d here", (int)numv(k));
+        r = menu_row(l, sub, counterTake, &a, sizeof a); iconItem(r, k->string);
+    }
+    JFOR(e, jget(state, "inv")) {
+        const char *id = e->string;
+        if (numv(e) <= 0 || !ITEM(id) || starts(id, "machine_") || !eq(storeFor(id), str(m, "type"))) continue;
+        snprintf(a.id, sizeof a.id, "%s", id);
+        snprintf(l, sizeof l, "Store %s", itemName(id)); snprintf(sub, sizeof sub, "you have %d", (int)numv(e));
+        r = menu_row(l, sub, counterStore, &a, sizeof a); iconItem(r, id);
+    }
+    menu_row("Close", NULL, NULL, NULL, 0);
+    menu_refresh(counterRefresh, &a, sizeof a);
+    menu_end();
+}
+// What didn't fit in the backpack waits in the farm's inbox.
+static bool inboxTake(void *arg) {
+    const char *id = ((MArg *)arg)->id; J *ov = child(state, "overflow");
+    int n = (int)fmin(num(ov, id), room(state, id));
+    if (!n) { toast("Your backpack is full."); return true; }
+    give(state, id, n); setnum(ov, id, num(ov, id) - n); if (!num(ov, id)) delkey(ov, id);
+    sfx("pop"); changed(); return true;
+}
+static void inboxRefresh(void *arg) { shops_inboxMenu(); }
+void shops_inboxMenu(void) {
+    MArg a = { NULL, "" };
+    J *ov = jget(state, "overflow");
+    menu_begin("Inbox");
+    if (jlen(ov)) menu_text("Backpack: %d/%d slots.", slotsUsed(state), (int)num(state, "bag"));
+    else menu_text("Empty. When your backpack fills up, what doesn't fit comes here.");
+    JFOR(k, ov) {
+        if (numv(k) <= 0) continue;
+        snprintf(a.id, sizeof a.id, "%s", k->string);
+        char l[80], sub[40]; snprintf(l, sizeof l, "Take %s", itemName(k->string)); snprintf(sub, sizeof sub, "%d here", (int)numv(k));
+        Row *r = menu_row(l, sub, inboxTake, &a, sizeof a); iconItem(r, k->string);
+    }
+    menu_row("Close", NULL, NULL, NULL, 0);
+    menu_refresh(inboxRefresh, &a, sizeof a);
+    menu_end();
+}
+
 static bool takeItemRow(void *arg) { J *m = ((MArg *)arg)->m; give(state, str(m, "item"), 1); setstr(m, "item", NULL); changed(); return true; }
 static bool feedRow(void *arg) {
     MArg *a = arg;
@@ -1525,7 +1749,10 @@ void machineMenu(J *m) {
     J *def = mdef(m);
     const char *type = str(m, "type");
     MArg a = { m, "" };
+    if (has(def, "store")) return storeMachineMenu(m);
+    if (has(def, "fixed")) return fixedMachineMenu(m);
     menu_begin(str(def, "name"));
+    issueText(m);
     if (noDir(type)) menu_text("%s", str(def, "desc"));
     else menu_text("%s · %s: %s", str(def, "desc"), eq(type, "arm") ? "places" : "output", dirName(str(m, "dir")));
     if (has(def, "power")) menu_text("%s", has(m, "unpowered") ? ":energy: No energy! Put a Solar Panel or Steam Boiler nearby (or Power Poles up to it)." : ":energy: Powered");
@@ -1539,7 +1766,33 @@ void machineMenu(J *m) {
         snprintf(sub, sizeof sub, "you have %d", count(state, "coal"));
         r = menu_row("Add coal", sub, coalRow, &a, sizeof a); row_icon(r, "item:coal");
     }
-    if ((eq(type, "arm") || eq(type, "splitter") || eq(type, "tunnel")) && str(m, "item")) {
+    if (has(def, "dock")) {
+        J *out = jget(m, "out");
+        menu_text("At the dock: %d/%d", jlen(out), DOCK_CAP);
+        int i = 0;
+        JFOR(d, jget(m, "drones")) {
+            DArg da = { m, i, "" };
+            char l[80], sb2[60];
+            snprintf(l, sizeof l, "Drone %d: %s%s", i + 1, str(d, "target") ? "harvesting " : "idle", str(d, "target") ? itemName(str(d, "target")) : "");
+            snprintf(sb2, sizeof sb2, jlen(jget(d, "carry")) ? "carrying %d" : "tap to choose the crop", jlen(jget(d, "carry")));
+            Row *dr = menu_row(l, sb2, droneMenuRow, &da, sizeof da);
+            if (str(d, "target")) iconItem(dr, str(d, "target"));
+            i++;
+        }
+        if (jlen(jget(m, "drones")) < MAX_DRONES) {
+            char id[24], sb3[24]; snprintf(id, sizeof id, "%.0f", num(m, "id")); snprintf(sb3, sizeof sb3, "%d/%d", jlen(jget(m, "drones")), MAX_DRONES);
+            shops_costRow(NULL, "Buy a drone", sb3, droneCost(), true, NULL, BUY_DRONE, id);
+        }
+    }
+    if (eq(type, "sorter")) {
+        char l[80];
+        snprintf(l, sizeof l, "Filter: %s", str(m, "filter") ? itemName(str(m, "filter")) : "none (everything goes straight on)");
+        r = menu_row(l, "tap to choose the item that turns to the side", sorterFilterRow, &a, sizeof a);
+        if (str(m, "filter")) iconItem(r, str(m, "filter"));
+        snprintf(l, sizeof l, "Side: %s", eq(str(m, "side"), "right") ? "right" : "left");
+        menu_row(l, "where the filtered item turns (facing the way the belt runs)", sorterSideRow, &a, sizeof a);
+    }
+    if ((eq(type, "arm") || eq(type, "splitter") || eq(type, "tunnel") || eq(type, "sorter")) && str(m, "item")) {
         snprintf(label, sizeof label, "Take %s", itemName(str(m, "item")));
         menu_row(label, NULL, takeItemRow, &a, sizeof a);
     }

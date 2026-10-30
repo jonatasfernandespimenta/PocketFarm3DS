@@ -19,7 +19,14 @@ static const char *PONDER_JSON = "{"
         "[\"belt\",6,1,\"right\"],[\"chest\",7,1,\"right\",\"sink\"]],\"caption\":\"The solar panel powers machines near it\"},"
     "\"logistics\":{\"w\":5,\"h\":3,\"pieces\":[[\"chest\",0,1,\"right\",[\"copper_bar\"]],[\"arm\",1,1,\"right\"],[\"belt\",2,1,\"right\"],[\"splitter\",3,1,\"right\"],"
         "[\"belt\",3,0,\"right\"],[\"belt\",3,2,\"right\"],[\"chest\",4,0,\"right\",\"sink\"],[\"chest\",4,2,\"right\",\"sink\"]],"
-        "\"caption\":\"The splitter sends one item to each side\"}"
+        "\"caption\":\"The splitter sends one item to each side\"},"
+    "\"storage\":{\"w\":8,\"h\":4,\"pieces\":[[\"chest\",0,3,\"right\",[\"wheat\",\"corn\"]],[\"arm\",1,3,\"right\"],[\"belt\",2,3,\"right\"],[\"silo\",3,2,\"down\"],"
+        "[\"arm\",5,3,\"right\"],[\"belt\",6,3,\"right\"],[\"chest\",7,3,\"right\",\"sink\"]],\"caption\":\"Cargo goes in at the orange mouth, an arm takes it out at the grey one\"},"
+    "\"sorter\":{\"w\":6,\"h\":2,\"pieces\":[[\"chest\",0,1,\"right\",[\"milk\",\"wool\"]],[\"arm\",1,1,\"right\"],[\"belt\",2,1,\"right\"],"
+        "[\"sorter\",3,1,\"right\",null,{\"filter\":\"wool\"}],[\"belt\",4,1,\"right\"],[\"chest\",5,1,\"right\",\"sink\"],[\"chest\",3,0,\"right\",\"sink\"]],"
+        "\"caption\":\"The sorter turns the wool to the arrow's side; milk goes straight on\"},"
+    "\"auto\":{\"w\":8,\"h\":2,\"pieces\":[[\"solar\",0,0,\"right\"],[\"chest\",2,1,\"right\",[\"milk\"]],[\"arm\",3,1,\"right\"],[\"cheesemaker\",4,0,\"right\"],"
+        "[\"belt\",6,1,\"right\"],[\"chest\",7,1,\"right\",\"sink\"]],\"caption\":\"The Cheese Maker curdles and presses on its own. Take it to the Cellar\"}"
 "}";
 static J *PONDER;
 #define RUN 16
@@ -51,7 +58,8 @@ static void ponderReset(void) {
         setstr(m, "type", jat(pc, 0)->valuestring);
         setnum(m, "x", numv(jat(pc, 1))); setnum(m, "y", numv(jat(pc, 2)));
         setstr(m, "dir", jat(pc, 3)->valuestring);
-        if (jat(pc, 4)) cJSON_AddItemToObject(m, "role", cJSON_Duplicate(jat(pc, 4), true));
+        if (jat(pc, 4) && !cJSON_IsNull(jat(pc, 4))) cJSON_AddItemToObject(m, "role", cJSON_Duplicate(jat(pc, 4), true));
+        JFOR(kv, jat(pc, 5)) cJSON_AddItemToObject(m, kv->string, cJSON_Duplicate(kv, true));   // extra fields (a sorter's filter…)
         cJSON_AddItemToArray(ms, m);
         armForget(-1 - i);
         i++;

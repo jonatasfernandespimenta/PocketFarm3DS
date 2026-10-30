@@ -10,6 +10,80 @@ double rngNext(Rng *r) { r->s = r->s * 1664525u + 1013904223u; return r->s / 429
 static double R(Rng *r) { return r ? rngNext(r) : frand(); }
 int randInt(Rng *r, int a, int b) { return a + (int)floor(R(r) * (b - a + 1)); }
 
+// ---- port industrial: B ----
+static J *animalDef(J *a) { return jget(table("ANIMALS"), str(a, "kind")); }
+static J *farmTechOf(J *s, const char *home) { return jget(jget(s, "farmTech"), home); }
+
+// Which map an animal is on: its pen on the farm from 6:00 until dark (19:00, like the night tint), inside its
+// building the rest of the time.
+const char *animalMap(J *s, J *a) {
+    const char *home = str(animalDef(a), "home");
+    double t = num(s, "time");
+    return t >= 6 * 60 && t < 19 * 60 && !isGranja(s, home) ? "farm" : str(jget(table("BUILDINGS"), home), "interior");
+}
+
+// Eat one from the backpack. Returns an error message, or NULL when eaten.
+const char *eat(J *s, const char *id) {
+    double e = num(table("FOOD_ENERGY"), id);
+    if (!e) return "You can't eat that.";
+    if (num(s, "energy") >= maxEnergy(s)) return "Energy is already full.";
+    if (!take(s, id, 1)) return "You don't have that.";
+    setnum(s, "energy", fmin(maxEnergy(s), num(s, "energy") + e));
+    return NULL;
+}
+
+// ---------- industrialization (fase 5) ----------
+// What the farm's machines weigh on the village; state.industry drifts a quarter of the way there each night,
+// so tearing machines down slowly brings the village back.
+double industryTarget(J *s) {
+    double t = 0;
+    J *w = table("INDUSTRY_WEIGHTS");
+    JFOR(m, jget(s, "machines")) {
+        t += num(w, str(m, "type"));
+        J *d = jget(m, "drones");
+        if (d) t += 2 * fmax(0, jlen(d) - 1);
+    }
+    JFOR(b, table("BUILDINGS")) t += (isGranja(s, b->string) ? 6 : 0) + (has(farmTechOf(s, b->string), "water") ? 1 : 0);
+    return t;
+}
+int industryBand(J *s) { int n = 0; JFOR(b, table("INDUSTRY_BANDS")) n += num(s, "industry") >= numv(b); return n; }
+// Everything bought in the village gets pricier (selling prices don't change).
+double priceMult(J *s) { return 1 + fmin(0.6, num(s, "industry") / 100); }
+int animalPrice(J *s, const char *kind) { return jround(num(jget(table("ANIMALS"), kind), "price") * priceMult(s)); }
+
+// ---------- factory farm (granja) ----------
+bool isGranja(J *s, const char *home) { J *t = farmTechOf(s, home); return has(t, "feeder") || has(t, "belt"); }
+int capacity(J *s, const char *home) { return num(DATA, "MAX_PER_HOME") * (isGranja(s, home) ? 2 : 1); }
+static J *port(J *s, const char *type, const char *home) {
+    JFOR(m, jget(s, "machines")) if (!strcmp(str(m, "type") ? str(m, "type") : "", type) && str(m, "home") && !strcmp(str(m, "home"), home)) return m;
+    return NULL;
+}
+// paid = the caller already charged the cost (the shop row does). Error message or NULL.
+const char *installTech(J *s, const char *home, const char *tech, bool paid) {
+    static char err[96];
+    J *t = jget(table("FARM_TECH"), tech), *ports = jget(jget(table("BUILDINGS"), home), "ports");
+    if (has(farmTechOf(s, home), tech)) return "Already installed.";
+    J *p = jget(ports, !strcmp(tech, "belt") ? "collector" : "feeder");
+    int px = numv(jat(p, 0)), py = numv(jat(p, 1));
+    if (strcmp(tech, "water") && (machineAt(s, px, py) || soilAt(s, px, py))) {
+        snprintf(err, sizeof err, "Clear the spot next to the building (%d, %d) first.", px, py);
+        return err;
+    }
+    if (!paid && !pay(s, jget(t, "cost"))) return "Not enough materials.";
+    setbool(child(child(s, "farmTech"), home), tech, true);
+    if (!strcmp(tech, "feeder")) {
+        J *f = jget(ports, "feeder");
+        setstr(place(s, "feeder", numv(jat(f, 0)), numv(jat(f, 1)), DOWN, nowMs()), "home", home);
+    }
+    if (!strcmp(tech, "belt")) {
+        J *c = jget(ports, "collector");
+        setstr(place(s, "collector", numv(jat(c, 0)), numv(jat(c, 1)), dirFrom(jat(c, 2)->valuestring), nowMs()), "home", home);
+    }
+    return NULL;
+}
+static double bigChance(J *s, const char *home) { return isGranja(s, home) ? 0.05 : 0.3; }
+// ---- end port industrial: B ----
+
 J *rollDrops(J *drops, Rng *r) {
     J *out = cJSON_CreateObject();
     JFOR(d, drops) {
@@ -166,7 +240,7 @@ J *deliverContract(J *s, double id) {
     J *active = jget(jget(s, "contracts"), "active"), *c = NULL;
     int idx = 0;
     JFOR(a, active) { if (num(a, "id") == id) { c = a; break; } idx++; }
-    if (!c || !take(s, str(c, "item"), num(c, "qty"))) return NULL;
+    if (!c || !takeAll(s, str(c, "item"), num(c, "qty"))) return NULL;
     bool last = !num(c, "weeks") || num(c, "weeks") <= 1;
     int paid = last && num(c, "weeks") ? jround(num(c, "reward") * 1.5) : num(c, "reward");
     earn(s, paid);
@@ -208,9 +282,9 @@ const char *buyAnimal(J *s, const char *kind, const char *name, double nowMs) {
     J *def = jget(table("ANIMALS"), kind);
     const char *home = str(def, "home");
     if (!has(jget(s, "buildings"), home)) return !strcmp(home, "coop") ? "You need to build the Coop." : "You need to build the Barn.";
-    if (animalsIn(s, home) >= num(DATA, "MAX_PER_HOME")) return "No room for more.";
-    if (num(s, "money") < num(def, "price")) return "Not enough coins.";
-    setnum(s, "money", num(s, "money") - num(def, "price"));
+    if (animalsIn(s, home) >= capacity(s, home)) return "No room for more.";
+    if (num(s, "money") < animalPrice(s, kind)) return "Not enough coins.";
+    setnum(s, "money", num(s, "money") - animalPrice(s, kind));
     J *a = cJSON_CreateObject(), *animals = childarr(s, "animals");
     setnum(a, "id", fmod(nowMs, 1e9) + jlen(animals));
     setstr(a, "kind", kind); setstr(a, "name", name);
@@ -224,7 +298,7 @@ const char *touchAnimal(J *s, J *a) {
     static char msg[96];
     if (has(a, "product")) {
         const char *item = str(jget(table("ANIMALS"), str(a, "kind")), "product");
-        bool big = num(a, "happy") >= 80 && frand() < 0.3;
+        bool big = num(a, "happy") >= 80 && frand() < bigChance(s, str(jget(table("ANIMALS"), str(a, "kind")), "home"));
         give(s, item, big ? 2 : 1);
         setbool(a, "product", false);
         snprintf(msg, sizeof msg, "+%d %s", big ? 2 : 1, str(jget(table("ITEMS"), item), "name"));
@@ -242,18 +316,34 @@ static void logf_(J *log, const char *fmt, ...) {
     cJSON_AddItemToArray(log, cJSON_CreateString(buf));
 }
 
-static void nightAnimals(J *s, J *log) {
+static void nightAnimals(J *s, J *log, double (*rand)(void)) {
     JFOR(a, jget(s, "animals")) {
         J *def = jget(table("ANIMALS"), str(a, "kind"));
+        const char *home = str(def, "home");
+        bool granja = isGranja(s, home);
+        J *feeder = port(s, "feeder", home), *collector = port(s, "collector", home);
         setnum(a, "age", num(a, "age") + 1);
-        if (take(s, "feed", 1)) {
+        // the feeder first, then the backpack
+        bool fed;
+        if (num(feeder, "feed") > 0) { setnum(feeder, "feed", num(feeder, "feed") - 1); fed = true; }
+        else fed = take(s, "feed", 1);
+        if (fed) {
             setnum(a, "happy", fmin(100, num(a, "happy") + 2));
-            if ((int)num(a, "age") % (int)num(def, "every") == 0) setbool(a, "product", true);
+            // a very unhappy animal only produces every other day
+            int age = num(a, "age");
+            if (age % (int)num(def, "every") == 0 && (num(a, "happy") >= 20 || age % 2 == 0)) setbool(a, "product", true);
         } else {
             setnum(a, "happy", fmax(0, num(a, "happy") - 10));
             logf_(log, "%s went without feed.", str(a, "name"));
         }
         if (num(a, "petDay") != num(s, "day")) setnum(a, "happy", fmax(0, num(a, "happy") - 3));
+        if (granja) setnum(a, "happy", fmax(0, num(a, "happy") - 5));   // confinement
+        if (has(a, "product") && collector && jlen(jget(collector, "out")) < num(DATA, "COLLECTOR_CAP")) {
+            bool big = num(a, "happy") >= 80 && rand() < bigChance(s, home);
+            J *out = childarr(collector, "out");
+            for (int i = big ? 2 : 1; i > 0; i--) cJSON_AddItemToArray(out, cJSON_CreateString(str(def, "product")));
+            setbool(a, "product", false);
+        }
         if (has(a, "product") && has(jget(s, "upgrades"), "collector")) { give(s, str(def, "product"), 1); setbool(a, "product", false); }
     }
 }
@@ -346,11 +436,17 @@ int checkGoals(J *s, J *done[], int max) {
 
 // ---------- night ----------
 // Everything that happens when the player sleeps. Returns lines for the morning report.
-J *newDay(J *s) {
+J *newDay(J *s) { return newDayRand(s, NULL); }
+// newDay(state, rand): rand = NULL → Math.random
+J *newDayRand(J *s, double (*rand)(void)) {
     J *log = cJSON_CreateArray();
     sleepCrops(s);
     if (has(jget(s, "projects"), "greenhouse")) JFOR(t, jget(s, "soil")) setbool(t, "wet", true);
-    nightAnimals(s, log);
+    nightAnimals(s, log, rand ? rand : frand);
+    ageCellars(s);
+    // a quarter of the way to the target each night, rising at most 3 a night (prices creep up, they never jump)
+    double ind = num(s, "industry");
+    setnum(s, "industry", jround((ind + fmin(3, (industryTarget(s) - ind) * 0.25)) * 100) / 100);
     int sold = 0, items = 0;
     nightFactory(s, &sold, &items);
     if (sold) { earn(s, sold); logf_(log, "Auto-Sell Box sold %d coins' worth.", sold); }
@@ -383,6 +479,7 @@ J *newDay(J *s) {
     }
     const char *before = seasonId(s);
     setnum(s, "day", num(s, "day") + 1);
+    growVines(s, !strcmp(seasonId(s), "fall"));
     setnum(s, "time", num(DATA, "DAY_START"));
     if (strcmp(seasonId(s), before)) {
         int dead = 0;

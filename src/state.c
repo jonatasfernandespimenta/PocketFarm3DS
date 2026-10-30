@@ -1,6 +1,7 @@
 // Game state + save/load (state.js). The state is the same JSON tree as the web build, so saves move between them.
 // localStorage keys become files on the SD card: sdmc:/3ds/PocketFarm/<key>.json
 #include <stdio.h>
+#include <limits.h>
 #include "game.h"
 
 #define VERSION 3
@@ -15,9 +16,10 @@ J *newState(void) {
         "\"contracts\":{\"day\":0,\"offers\":[],\"active\":[]},\"tax\":{\"amount\":0,\"due\":0},\"mineLevel\":1,\"mineDeepest\":1,"
         "\"stats\":{\"earned\":0,\"harvested\":0,\"cleared\":0,\"contracts\":0,\"fished\":0,\"smelted\":0,\"foraged\":0},"
         "\"goals\":{},\"freeWaterDay\":0,\"trades\":{\"pending\":{},\"used\":[]},\"muted\":false,\"farmName\":\"\",\"workshop\":{},"
-        "\"daily\":null,\"friendsList\":{},\"blueprints\":[],\"blueprint\":null,\"giftDay\":\"\"}");
+        "\"daily\":null,\"friendsList\":{},\"blueprints\":[],\"blueprint\":null,\"giftDay\":\"\",\"farmTech\":{},\"industry\":0,\"overflow\":{}}");
     setnum(s, "time", num(DATA, "DAY_START"));
     setnum(s, "energy", num(DATA, "BASE_ENERGY"));
+    setnum(s, "bag", BAG_SLOTS);
     cJSON_ReplaceItemInObjectCaseSensitive(s, "decor", cJSON_Duplicate(table("STARTER_DECOR"), true));
     return s;
 }
@@ -133,7 +135,31 @@ int maxEnergy(J *s) {
 
 // ---------- inventory ----------
 int count(J *s, const char *id) { return num(jget(s, "inv"), id); }
-void give(J *s, const char *id, int n) { setnum(child(s, "inv"), id, count(s, id) + n); }
+static bool freeItem(const char *id) { return !strncmp(id, "machine_", 8); }   // factory pieces don't take backpack space
+int slotsUsed(J *s) {
+    int n = 0;
+    JFOR(it, jget(s, "inv")) if (numv(it) > 0 && !freeItem(it->string)) n += ceil(numv(it) / STACK);
+    return n;
+}
+// How many more `id` fit: the rest of its last stack plus free slots.
+int room(J *s, const char *id) {
+    if (freeItem(id)) return INT_MAX;
+    J *b = jget(s, "bag");
+    int n = count(s, id), partial = n > 0 && n % STACK ? STACK - n % STACK : 0;
+    int bag = cJSON_IsNumber(b) ? b->valuedouble : BAG_SLOTS;
+    return partial + (int)fmax(0, bag - slotsUsed(s)) * STACK;
+}
+// Never loses an item: what doesn't fit goes to state.overflow (the inbox). Returns how many overflowed.
+int give(J *s, const char *id, int n) {
+    int r = room(s, id), fit = n < r ? n : r;
+    if (fit > 0) setnum(child(s, "inv"), id, count(s, id) + fit);
+    if (n > fit) {
+        J *o = child(s, "overflow");
+        setnum(o, id, num(o, id) + n - fit);
+        setbool(s, "overflowNew", true);
+    }
+    return n - fit;
+}
 bool take(J *s, const char *id, int n) {
     if (count(s, id) < n) return false;
     J *inv = jget(s, "inv");
@@ -141,14 +167,33 @@ bool take(J *s, const char *id, int n) {
     if (!count(s, id)) delkey(inv, id);
     return true;
 }
+// Backpack plus every warehouse (machines with a stock). Costs and contracts can use both; selling and gifts can't.
+int countAll(J *s, const char *id) {
+    int n = count(s, id);
+    JFOR(m, jget(s, "machines")) if (cJSON_IsObject(jget(m, "stock"))) n += num(jget(m, "stock"), id);
+    return n;
+}
+bool takeAll(J *s, const char *id, int n) {
+    if (countAll(s, id) < n) return false;
+    int fromBag = n < count(s, id) ? n : count(s, id);
+    if (fromBag) take(s, id, fromBag);
+    n -= fromBag;
+    JFOR(m, jget(s, "machines")) {
+        J *st = jget(m, "stock");
+        if (!cJSON_IsObject(st)) continue;
+        int have = num(st, id), k = n < have ? n : have;
+        if (k) { setnum(st, id, have - k); if (!num(st, id)) delkey(st, id); n -= k; }
+    }
+    return true;
+}
 // cost = { itemId: qty, money: n }
 bool canAfford(J *s, J *cost) {
-    JFOR(k, cost) if ((!strcmp(k->string, "money") ? num(s, "money") : count(s, k->string)) < numv(k)) return false;
+    JFOR(k, cost) if ((!strcmp(k->string, "money") ? num(s, "money") : countAll(s, k->string)) < numv(k)) return false;
     return true;
 }
 bool pay(J *s, J *cost) {
     if (!canAfford(s, cost)) return false;
-    JFOR(k, cost) if (!strcmp(k->string, "money")) setnum(s, "money", num(s, "money") - numv(k)); else take(s, k->string, numv(k));
+    JFOR(k, cost) if (!strcmp(k->string, "money")) setnum(s, "money", num(s, "money") - numv(k)); else takeAll(s, k->string, numv(k));
     return true;
 }
 void earn(J *s, int n) {

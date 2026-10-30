@@ -31,7 +31,7 @@ typedef struct Ent {
     bool hasCol; Rect col;
 } Ent;
 typedef struct World {
-    char id[16]; J *def; Map *map;
+    char id[24]; J *def; Map *map;
     Ent ents[64]; int nents;
     Node nodes[40]; int nnodes;
     bool hasLadder; Tile ladder;
@@ -74,6 +74,7 @@ const char *game_mapName(void) { return mapName(); }
 
 static void questDonePopup(void *arg) { shops_questDone(*(J **)arg); }
 void changed(void) {
+    if (has(state, "overflowNew")) { delkey(state, "overflowNew"); toast("Backpack full: what didn't fit went to the Inbox (next to the house)."); }
     setMuted(has(state, "muted"));
     setMusicEnabled(!has(state, "musicOff"));
     J *goals[16]; int n = checkGoals(state, goals, 16);
@@ -152,7 +153,12 @@ static void pickEquip(const char *kind) {
     bool seeds = eq(kind, "seeds");
     menu_begin(seeds ? ":bag: Pick a seed" : ":wrench: Pick a machine");
     const char *l[32]; int n = seeds ? ownedSeeds(l, 32) : ownedMachines(l, 32);
+    // machines: grouped by MACHINE_GROUPS (Transport, Machines, Kitchen, Power, Warehouses, Farm), with headers
+    int grp[32];
+    for (int i = 0; i < n; i++) { grp[i] = 99; int g = 0; JFOR(G, T("MACHINE_GROUPS")) { JFOR(e, jat(G, 1)) if (!seeds && eq(e->valuestring, l[i])) grp[i] = g; g++; } }
+    for (int i = 1; i < n; i++) for (int j = i; j > 0 && grp[j] < grp[j - 1]; j--) { int tg = grp[j]; grp[j] = grp[j - 1]; grp[j - 1] = tg; const char *tl = l[j]; l[j] = l[j - 1]; l[j - 1] = tl; }
     for (int i = 0; i < n; i++) {
+        if (!seeds && (i == 0 || grp[i] != grp[i - 1])) { J *G = jat(T("MACHINE_GROUPS"), grp[i]); menu_text("— %s —", G ? jat(G, 0)->valuestring : "Other"); }
         char id[48]; snprintf(id, sizeof id, seeds ? "seed_%s" : "machine_%s", l[i]);
         char name[96], info[160];
         snprintf(name, sizeof name, "%s ×%d", itemName(id), count(state, id));
@@ -215,7 +221,7 @@ static bool entitySolid(int x, int y) {
     for (int i = 0; i < world->nnodes; i++) if (world->nodes[i].x == x && world->nodes[i].y == y) return true;
     return false;
 }
-bool isFlat(J *m) { const char *t = str(m, "type"); return eq(t, "belt") || eq(t, "splitter") || eq(t, "tunnel"); }
+bool isFlat(J *m) { const char *t = str(m, "type"); return eq(t, "belt") || eq(t, "splitter") || eq(t, "tunnel") || eq(t, "sorter"); }
 // Pathfinding grid (tile level) and movement test (pixel box).
 static bool solid(int x, int y) { return isBlocked(world->map, x, y) || entitySolid(x, y); }
 static bool blocked(Rect box) {
@@ -223,6 +229,27 @@ static bool blocked(Rect box) {
     for (int y = floor(box.y / 16); y <= floor((box.y + box.h - 0.01) / 16); y++)
         for (int x = floor(box.x / 16); x <= floor((box.x + box.w - 0.01) / 16); x++) if (entitySolid(x, y)) return true;
     return false;
+}
+static Tile tileOf(double px, double py);
+// Standing inside something solid (a piece built around you, an old save's layout): hop to the nearest free
+// tile. Called every frame; it's one box test when you're fine.
+static void unstick(void) {
+    if (!blocked(feetBox(player.x, player.y))) return;
+    Tile q[2048]; int head = 0, tail = 0;
+    static bool seen[64][64];
+    memset(seen, 0, sizeof seen);
+    Tile t0 = tileOf(player.x, player.y);
+    q[tail++] = t0; if (t0.x >= 0 && t0.y >= 0 && t0.x < 64 && t0.y < 64) seen[t0.y][t0.x] = true;
+    while (head < tail) {
+        Tile c = q[head++];
+        double x = (c.x + 0.5) * 16, y = (c.y + 0.7) * 16;
+        if (!blocked(feetBox(x, y))) { player.x = x; player.y = y; return; }
+        for (int d = 0; d < 4; d++) {
+            Tile n = { c.x + DV[d][0], c.y + DV[d][1] };
+            if (n.x < 0 || n.y < 0 || n.x >= 64 || n.y >= 64 || seen[n.y][n.x] || !inBounds(world->map, n.x, n.y) || tail >= 2048) continue;
+            seen[n.y][n.x] = true; q[tail++] = n;
+        }
+    }
 }
 static bool freeForBuild(int x, int y) {
     Prop *p;
@@ -271,19 +298,20 @@ static void addBuildingColliders(void) {
 static Tile tileOf(double px, double py) { return (Tile){ floor(px / 16), floor((py - 3) / 16) }; }
 
 // What's on a tile, for interaction.
-enum { TH_NONE, TH_NPC, TH_NODE, TH_LADDER, TH_ANIMAL, TH_MACHINE, TH_FARMBUILDING, TH_BUILDING, TH_SELL, TH_GACHA, TH_BOARD, TH_WARP, TH_PROP, TH_OBJECT };
+enum { TH_NONE, TH_NPC, TH_NODE, TH_LADDER, TH_ANIMAL, TH_MACHINE, TH_FARMBUILDING, TH_BUILDING, TH_SELL, TH_GACHA, TH_BOARD, TH_WARP, TH_PROP, TH_OBJECT, TH_TROUGH, TH_COUNTER };
 typedef struct { int kind; Ent *e; Node *n; J *j; Prop *p; } Thing;
 static Thing thingAt(int x, int y) {
     Rect tile = { x * 16, y * 16, 16, 16 };
     for (int i = 0; i < world->nents; i++) { Ent *e = &world->ents[i]; Tile t = tileOf(e->px, e->py); if (eq(e->type, "npc") && t.x == x && t.y == y) return (Thing){ TH_NPC, e }; }
     for (int i = 0; i < world->nnodes; i++) if (world->nodes[i].x == x && world->nodes[i].y == y) return (Thing){ TH_NODE, .n = &world->nodes[i] };
     if (world->hasLadder && world->ladder.x == x && world->ladder.y == y) return (Thing){ TH_LADDER };
+    JFOR(a, jget(state, "animals")) if (cJSON_IsNumber(jget(a, "px"))) { Tile t = tileOf(num(a, "px"), num(a, "py")); if (t.x == x && t.y == y) return (Thing){ TH_ANIMAL, .j = a }; }
     if (eq(world->id, "farm")) {
-        JFOR(a, jget(state, "animals")) if (cJSON_IsNumber(jget(a, "px"))) { Tile t = tileOf(num(a, "px"), num(a, "py")); if (t.x == x && t.y == y) return (Thing){ TH_ANIMAL, .j = a }; }
         J *m = machineAt(state, x, y);
         if (m) return (Thing){ TH_MACHINE, .j = m };
+        // a farm building is entered from its front, near the door (not the back or side walls)
         J *bs[8]; int nb = builtBuildings(bs);
-        for (int i = 0; i < nb; i++) if (rectsOverlap(builtCol[i], tile)) return (Thing){ TH_FARMBUILDING, .j = bs[i] };
+        for (int i = 0; i < nb; i++) { J *door = jget(bs[i], "door"); if (rectsOverlap(builtCol[i], tile) && abs(x - (int)num(door, "x")) <= 1 && y >= num(door, "y") - 1) return (Thing){ TH_FARMBUILDING, .j = bs[i] }; }
     }
     for (int i = 0; i < world->nents; i++) {
         Ent *e = &world->ents[i];
@@ -294,6 +322,8 @@ static Thing thingAt(int x, int y) {
         if (eq(e->type, "warp") && has(e->d, "interact") && inRectT(x, y, e->x, e->y, e->w, e->h)) return (Thing){ TH_WARP, e };
     }
     Prop *p = propAt(world->map, x, y);
+    if (p && eq(p->item, "hay_trough")) return (Thing){ TH_TROUGH, .p = p };
+    if (p && eq(p->item, "counter")) return (Thing){ TH_COUNTER, .p = p };
     if (p && !eq(p->kind, "flower")) return (Thing){ TH_PROP, .p = p };
     return (Thing){ TH_NONE };
 }
@@ -310,6 +340,12 @@ static void descend(void);
 static void drinkWell(void);
 static void askSleep(void);
 static void farmBuildingMenu(J *b);
+static void stationUse(J *m);
+static void vineUse(J *m);
+static Tile storeDoor(J *m);
+static J *storeOfMap(const char *id);
+static float seeThrough(double x, double top, double w, double bottom);
+static void iconItem(Row *r, const char *id) { char k[48]; snprintf(k, sizeof k, "item:%s", id); row_icon(r, k); }
 void machineMenu(J *m);
 static void startFishing(Tile t);
 static void shopFor(const char *action);
@@ -333,6 +369,7 @@ static void interact(Tile t) {
         if (str(r, "interior")) { goTo(str(r, "interior"), false, 0, 0); return; }
         if (!str(r, "action")) { toast("%s", jat(jget(r, "lines"), 0) ? jat(jget(r, "lines"), 0)->valuestring : str(r, "name")); return; }
         if (eq(str(r, "action"), "well")) { drinkWell(); return; }
+        if (eq(str(r, "action"), "inbox")) { shops_inboxMenu(); return; }
         if (eq(str(r, "action"), "blocked")) { toast("%s", jat(jget(r, "lines"), 0)->valuestring); return; }
         if (eq(str(r, "action"), "fountain")) { toast(":sparkle: Pocket Town's fountain. You rebuilt all of this!"); return; }
         sfx("door"); shopFor(str(r, "action"));
@@ -343,7 +380,9 @@ static void interact(Tile t) {
     case TH_BOARD: shops_boardMenu(); return;
     case TH_WARP: { J *sp = jget(th.e->d, "spawn"); goTo(str(th.e->d, "to"), sp != NULL, num(sp, "x"), num(sp, "y")); return; }
     case TH_LADDER: descend(); return;
-    case TH_FARMBUILDING: farmBuildingMenu(th.j); return;
+    case TH_FARMBUILDING: goTo(str(th.j, "interior"), false, 0, 0); return;
+    case TH_TROUGH: { const char *home = str(jget(T("INTERIORS"), world->id), "building"); if (home) farmBuildingMenu(jget(T("BUILDINGS"), home)); return; }
+    case TH_COUNTER: shops_storeMenu(storeOfMap(world->id)); return;
     case TH_ANIMAL: {
         J *a = th.j;
         faceTile(&player, t);
@@ -353,7 +392,14 @@ static void interact(Tile t) {
         changed();
         return;
     }
-    case TH_MACHINE: machineMenu(th.j); return;
+    case TH_MACHINE: {
+        J *m = th.j, *d = mdef(m);
+        if (has(d, "store")) { Tile door = storeDoor(m); if (t.x == door.x && t.y == door.y) { char k[24]; snprintf(k, sizeof k, "store:%.0f", num(m, "id")); goTo(k, false, 0, 0); return; } }
+        if (has(d, "station")) { stationUse(m); return; }
+        if (has(d, "vine")) { vineUse(m); return; }
+        machineMenu(m);
+        return;
+    }
     case TH_NODE:
         if (!eq(str(state, "tool"), "pickaxe")) { toast("Use the pickaxe to break it."); return; }
         swingNode(t, th.n);
@@ -399,6 +445,7 @@ static void flyItem(const char *id, double x, double y) { fx_fly(id, x, y); }
 static void harvestHit(void *arg) {
     HarvestArg *a = arg;
     J *tile = soilAt(state, a->x, a->y);
+    if (!isReady(tile)) return;   // a drone got there first
     int n = hasBonus(state, "luck") && frand() < 0.1 ? 2 : 1;
     give(state, a->crop, n);
     floatText(a->x * 16 + 8, a->y * 16, "+%d %s", n, str(jget(T("CROPS"), a->crop), "name"));
@@ -441,6 +488,10 @@ static void useTool(Tile t) {
         snprintf(a.crop, sizeof a.crop, "%s", str(tile, "crop"));
         act("hand", harvestHit, &a, sizeof a, 0.3);
         return;
+    }
+    // any pond or river fills the bucket (the town well needs a village project)
+    if (!eq(tool, "rod") && count(state, "bucket") && isWater(world->map, t.x, t.y)) {
+        give(state, "water", 5); floatText(t.x * 16 + 8, t.y * 16, "+5 %s", itemName("water")); sfx("water"); changed(); return;
     }
     if (eq(tool, "hoe")) {
         if (!eq(world->id, "farm")) { toast("You can only till on the farm."); return; }
@@ -634,12 +685,26 @@ static void clearArea(J *r) {
     if (jget(r, "pen")) clearArea(jget(r, "pen"));
 }
 
+static bool wellFill(void *a) { give(state, "water", 5); sfx("water"); changed(); return true; }
+static bool wellDrink(void *a);
 static void drinkWell(void) {
-    if (num(state, "wellDay") == num(state, "day")) { toast("You already drank fresh water today."); return; }
+    if (count(state, "bucket")) {
+        menu_begin("Well");
+        menu_row("Fill the bucket", "+5 water (for bread dough)", wellFill, NULL, 0);
+        menu_row("Drink", num(state, "wellDay") == num(state, "day") ? "already drank today" : "+6 energy", wellDrink, NULL, 0);
+        menu_row("Close", NULL, NULL, NULL, 0);
+        menu_end();
+        return;
+    }
+    wellDrink(NULL);
+}
+static bool wellDrink(void *a) {
+    if (num(state, "wellDay") == num(state, "day")) { toast("You already drank fresh water today."); return false; }
     setnum(state, "wellDay", num(state, "day"));
     setnum(state, "energy", fmin(maxEnergy(state), num(state, "energy") + 6));
     floatText(player.x, player.y - 30, "+6 :energy:");
     sfx("water"); changed();
+    return false;
 }
 
 static char clockShown[16];
@@ -731,9 +796,23 @@ static void sleepDone(void) {
 }
 void sleepNow(void) { transitioning = true; hud_fade(sleepDone); }
 
+// A granja's port tile is taken (machine or soil): the reason, else NULL.
+static const char *blockedPort(J *b, const char *tech, char *why, int n) {
+    if (eq(tech, "water")) return NULL;
+    J *p = jget(jget(b, "ports"), eq(tech, "belt") ? "collector" : "feeder");
+    int x = (int)jat(p, 0)->valuedouble, y = (int)jat(p, 1)->valuedouble;
+    if (!machineAt(state, x, y) && !soilAt(state, x, y)) return NULL;
+    snprintf(why, n, "clear the spot (%d, %d) next to the building", x, y);
+    return why;
+}
+static void farmBuildingRefresh(void *arg) { farmBuildingMenu(jget(T("BUILDINGS"), (const char *)arg)); }
 static void farmBuildingMenu(J *b) {
+    J *feeder = NULL;
+    JFOR(m, jget(state, "machines")) if (eq(str(m, "type"), "feeder") && eq(str(m, "home"), b->string)) feeder = m;
     menu_begin(str(b, "name"));
-    menu_text("Feed in stock: %d (each animal eats 1 per night). Buy at the Market or the Carpenter.", count(state, "feed"));
+    if (feeder) menu_text("Feed: %d in the feeder, %d in your backpack (each animal eats 1 per night). %d spots.", (int)num(feeder, "feed"), count(state, "feed"), capacity(state, b->string));
+    else menu_text("Feed in stock: %d (each animal eats 1 per night). Buy at the Market or the Carpenter. %d spots.", count(state, "feed"), capacity(state, b->string));
+    if (isGranja(state, b->string)) menu_text("Factory farm: the animals never go out to the pen. Happiness only comes from petting.");
     int n = 0;
     JFOR(a, jget(state, "animals")) {
         J *def = jget(T("ANIMALS"), str(a, "kind"));
@@ -745,6 +824,119 @@ static void farmBuildingMenu(J *b) {
         n++;
     }
     if (!n) menu_text("No animals yet. Buy some at the town Carpenter.");
+    if (questOpen(state, "granja")) {
+        bool any = false;
+        JFOR(t, T("FARM_TECH")) {
+            if (has(jget(jget(state, "farmTech"), b->string), t->string)) continue;
+            if (!any) { menu_text("Automation:"); any = true; }
+            char id[48], label[80], why[80];
+            snprintf(id, sizeof id, "%s|%s", b->string, t->string);
+            snprintf(label, sizeof label, "Install %s", str(t, "name"));
+            const char *blocked = blockedPort(b, t->string, why, sizeof why);
+            shops_costRow(NULL, label, str(t, "desc"), jget(t, "cost"), !blocked, blocked, BUY_TECH, id);
+        }
+    }
+    menu_row("Close", NULL, NULL, NULL, 0);
+    menu_refresh(farmBuildingRefresh, b->string, strlen(b->string) + 1);
+    menu_end();
+}
+
+// shops_costRow actions that live here: install a granja machine ("home|tech"), buy a drone (dock id).
+void game_buyAction(int act, const char *id) {
+    if (act == BUY_TECH) {
+        char home[24]; const char *bar = strchr(id, '|');
+        snprintf(home, sizeof home, "%.*s", (int)(bar - id), id);
+        const char *err = installTech(state, home, bar + 1, true);
+        if (err) toast("%s", err);
+        spawnAnimals();
+    } else if (act == BUY_DRONE) {
+        JFOR(m, jget(state, "machines")) { char k[24]; snprintf(k, sizeof k, "%.0f", num(m, "id")); if (eq(k, id)) cJSON_AddItemToArray(childarr(m, "drones"), newDrone(m)); }
+    }
+}
+
+// ---------- cooking stations: with work queued, interacting is the work itself (tap, tap, tap) ----------
+static void stationMenu(J *m);
+static void stationUse(J *m) {
+    J *st = jget(T("STATIONS"), str(m, "type"));
+    if (str(st, "work") && stationQueued(m)) {
+        double p = 0;
+        const char *done = work(state, m, &p);
+        int size = num(mdef(m), "size");
+        if (done) floatText((num(m, "x") + size / 2.0) * 16, num(m, "y") * 16, "+1 %s", itemName(done));
+        else floatText((num(m, "x") + size / 2.0) * 16, num(m, "y") * 16, "%s %d%%", str(st, "verb"), (int)jround(p * 100));
+        fx_puff((num(m, "x") + 0.5) * 16, (num(m, "y") + 0.8) * 16, 0xe8d8b0ff, 3); sfx(done ? "pop" : "hoe"); changed();
+        return;
+    }
+    stationMenu(m);
+}
+typedef struct { J *m; char id[24]; } StArg;
+static bool stInput(void *arg) { StArg *a = arg; addInput(state, a->m, a->id); changed(); toast("Now tap the %s several times.", str(mdef(a->m), "name")); return false; }
+static bool stMix(void *arg) { StArg *a = arg; if (!mix(state, a->m)) toast("You need flour and water (fill a bucket at a pond)."); else { sfx("pop"); changed(); } return true; }
+static bool stBottle(void *arg) { StArg *a = arg; if (!bottle(state, a->m)) toast("You need an empty bottle and a cork (Market)."); else { sfx("pop"); changed(); } return true; }
+static bool stCook(void *arg) { StArg *a = arg; const char *err = startCook(state, a->m, a->id); if (err) toast("%s", err); else { sfx("pop"); changed(); } return true; }
+static bool stCollect(void *arg) { StArg *a = arg; collectCooked(state, a->m); sfx("pop"); changed(); return true; }
+static bool stPickUp(void *arg) { pickUp(state, ((StArg *)arg)->m); refreshTools(); return false; }
+static void stRefresh(void *arg) { stationMenu(((StArg *)arg)->m); }
+static void stationMenu(J *m) {
+    J *def = mdef(m), *st = jget(T("STATIONS"), str(m, "type"));
+    StArg a = { m, "" };
+    char label[80], sub[120];
+    menu_begin(str(def, "name"));
+    menu_text("%s", str(def, "desc"));
+    if (eq(str(m, "type"), "workbench")) JFOR(d, T("MACHINES")) {
+        if (!eq(str(d, "shop"), "workbench")) continue;
+        char icon[48]; snprintf(icon, sizeof icon, "item:machine_%s", d->string);
+        snprintf(label, sizeof label, "Make %s", str(d, "name"));
+        shops_costRow(icon, label, str(d, "desc"), jget(d, "craft"), true, NULL, BUY_CRAFT, d->string);
+    }
+    if (jget(st, "mix")) {
+        snprintf(sub, sizeof sub, "1 flour + 1 water · you have %d flour, %d water", countAll(state, "flour"), countAll(state, "water"));
+        Row *r = menu_row("Mix dough", sub, stMix, &a, sizeof a); row_icon(r, "item:dough");
+    }
+    if (str(st, "work")) {
+        if (stationQueued(m)) menu_text("Queued: %d. Close this and tap the station several times.", stationQueued(m));
+        const char *in = str(st, "input");
+        if (countAll(state, in)) {
+            snprintf(a.id, sizeof a.id, "%s", in); snprintf(label, sizeof label, "Add %s", itemName(in)); snprintf(sub, sizeof sub, "you have %d", countAll(state, in));
+            Row *r = menu_row(label, sub, stInput, &a, sizeof a); iconItem(r, in);
+        }
+    }
+    if (eq(str(m, "type"), "tub") && countAll(state, "must")) {
+        snprintf(sub, sizeof sub, "must + bottle + cork · %d bottles, %d corks", countAll(state, "bottle"), countAll(state, "cork"));
+        Row *r = menu_row("Fill a bottle", sub, stBottle, &a, sizeof a); row_icon(r, "item:bottled_must");
+    }
+    if (jget(st, "bake")) {
+        const char *k = cookState(state, m);
+        bool oven = eq(str(m, "type"), "oven");
+        J *ck = jget(jget(m, "st"), "cooking");
+        if (eq(k, "cooking")) menu_text("%s %s: %d min left.", oven ? "Baking" : "Cooking", itemName(str(ck, "id")), minutesLeft(state, m));
+        else if (!eq(k, "idle")) {
+            snprintf(label, sizeof label, eq(k, "burnt") ? "Take it out (burnt!)" : "Take out %s", itemName(str(ck, "out")));
+            Row *r = menu_row(label, NULL, stCollect, &a, sizeof a); iconItem(r, eq(k, "burnt") ? "burnt_bread" : str(ck, "out"));
+        } else JFOR(b, jget(st, "bake")) {
+            if (!countAll(state, b->string)) continue;
+            snprintf(a.id, sizeof a.id, "%s", b->string);
+            snprintf(label, sizeof label, "%s %s", oven ? "Bake" : "Cook", itemName(b->string));
+            snprintf(sub, sizeof sub, oven ? "becomes %s in 1h · uses 1 wood or coal" : "becomes %s in 30 min · uses 1 rennet", itemName(b->valuestring));
+            Row *r = menu_row(label, sub, stCook, &a, sizeof a); iconItem(r, b->string);
+        }
+    }
+    menu_row("Put in backpack", "What's inside comes back to the backpack", stPickUp, &a, sizeof a);
+    menu_row("Close", NULL, NULL, NULL, 0);
+    menu_refresh(stRefresh, &a, sizeof a);
+    menu_end();
+}
+static bool vinePickUp(void *arg) { pickUp(state, *(J **)arg); refreshTools(); return false; }
+static void vineUse(J *m) {
+    if (harvestVine(state, m)) {
+        floatText((num(m, "x") + 1) * 16, num(m, "y") * 16, "+6 %s", itemName("grape"));
+        flyItem("grape", (num(m, "x") + 1) * 16, num(m, "y") * 16); sfx("pop"); changed();
+        return;
+    }
+    menu_begin(str(mdef(m), "name"));
+    double age = num(jget(m, "st"), "age");
+    if (age < 7) menu_text("Growing: %d/7 days.", (int)age); else menu_text("Grown. Gives grapes in the fall (again 3 nights after each harvest).");
+    menu_row("Put in backpack", NULL, vinePickUp, &m, sizeof m);
     menu_row("Close", NULL, NULL, NULL, 0);
     menu_end();
 }
@@ -971,6 +1163,20 @@ static void setupFestival(void);
 static void returnMisplacedMachines(Map *map);
 static void setDecor(bool on);
 
+// ---------- warehouses (fase 2): the door is the middle of the bottom row; inside is map "store:<id>" ----------
+static Tile storeDoor(J *m) { int n = num(mdef(m), "size"); return (Tile){ (int)num(m, "x") + n / 2, (int)num(m, "y") + rows(str(m, "type")) - 1 }; }
+static J *storeOfMap(const char *id) {
+    JFOR(x, jget(state, "machines")) { char k[24]; snprintf(k, sizeof k, "store:%.0f", num(x, "id")); if (eq(k, id)) return x; }
+    return NULL;
+}
+static J *storeMapDef(const char *type) {   // a MAPS-like def for the room: { name, indoor, noBreak }
+    static J *defs;
+    if (!defs) defs = cJSON_CreateObject();
+    J *d = jget(defs, type);
+    if (!d) { d = cJSON_CreateObject(); setstr(d, "name", str(jget(T("MACHINES"), type), "name")); setbool(d, "indoor", true); setbool(d, "noBreak", true); cJSON_AddItemToObject(defs, type, d); }
+    return d;
+}
+
 static void enterMap(const char *id, bool hasSpawn, double sx, double sy) {
     J *def = jget(T("MAPS"), id);
     freeWorld();
@@ -984,16 +1190,50 @@ static void enterMap(const char *id, bool hasSpawn, double sx, double sy) {
         setnum(w, "x", world->map->door.x); setnum(w, "y", world->map->door.y);
         addEnt(w, true);
         if (!hasSpawn) { sx = world->map->door.x + 0.5; sy = world->map->door.y - 0.1; }
+    } else if (!strncmp(id, "store:", 6)) {
+        // a warehouse: a room with its stock piled up and a counter; door back to the farm below its door tile
+        J *m = storeOfMap(id);
+        if (!m) { enterMap("farm", false, 0, 0); return; }
+        const char *type = str(m, "type"), *pile = eq(type, "silo") ? "hay_bale" : eq(type, "cellar") ? "wine_barrel" : "crate_s";
+        int n = (int)ceil(12.0 * stored(m) / num(mdef(m), "cap"));
+        static const int SPOTS[12][2] = { { 1, 4 }, { 2, 4 }, { 3, 4 }, { 7, 4 }, { 8, 4 }, { 1, 5 }, { 2, 5 }, { 3, 5 }, { 7, 5 }, { 8, 5 }, { 1, 6 }, { 8, 6 } };
+        J *placed = cJSON_Parse("[{\"item\":\"counter\",\"x\":4,\"y\":3}]");
+        for (int i = 0; i < n && i < 12; i++) { J *p = cJSON_CreateObject(); setstr(p, "item", pile); setnum(p, "x", SPOTS[i][0]); setnum(p, "y", SPOTS[i][1]); cJSON_AddItemToArray(placed, p); }
+        world->map = buildRoom(8, 5, eq(type, "cold") ? "stone" : "wood", eq(type, "cold") ? "stone" : "wood", placed, false);
+        cJSON_Delete(placed);
+        def = world->def = storeMapDef(type);
+        Tile door = storeDoor(m);
+        J *w = cJSON_Parse("{\"type\":\"warp\",\"w\":1,\"h\":1,\"to\":\"farm\"}"), *sp = cJSON_CreateObject();
+        setnum(w, "x", world->map->door.x); setnum(w, "y", world->map->door.y);
+        setnum(sp, "x", door.x + 0.5); setnum(sp, "y", door.y + 1.6);
+        cJSON_AddItemToObject(w, "spawn", sp);
+        addEnt(w, true);
+        if (!hasSpawn) { sx = world->map->door.x + 0.5; sy = world->map->door.y - 0.1; }
     } else if (interior) {
-        // town building: its room, the villager who works there (unless they're at the festival), door back out
+        // town or farm building: its room, the villager who works there (unless they're at the festival), door back out
         J *b = NULL, *npc = NULL;
-        JFOR(e, jget(T("ENTITIES"), "town")) { if (eq(str(e, "interior"), id)) b = e; if (eq(str(e, "type"), "npc") && eq(str(e, "home"), id)) npc = e; }
-        world->map = buildRoom(num(interior, "w"), num(interior, "d"), str(interior, "wall"), str(interior, "floor"), jget(interior, "placed"), false);
-        J *w = cJSON_Parse("{\"type\":\"warp\",\"w\":1,\"h\":1,\"to\":\"town\"}"), *sp = cJSON_CreateObject();
+        const char *home = str(interior, "building"), *back = str(interior, "from") ? str(interior, "from") : "town";
+        if (home) b = jget(T("BUILDINGS"), home);
+        else JFOR(e, jget(T("ENTITIES"), "town")) { if (eq(str(e, "interior"), id)) b = e; if (eq(str(e, "type"), "npc") && eq(str(e, "home"), id)) npc = e; }
+        J *placed = jget(interior, "placed"), *own = NULL;
+        const char *wall = str(interior, "wall"), *floor_ = str(interior, "floor");
+        if (home && isGranja(state, home)) {
+            // a factory farm: stone and stalls instead of hay and logs (stalls 2 tiles each, around the trough)
+            static const int COOP[] = { 1, 5, 7 }, BARN[] = { 4, 6, 8 };
+            own = cJSON_CreateArray();
+            cJSON_AddItemToArray(own, cJSON_Duplicate(jat(placed, 0), true));
+            for (int i = 0; i < 3; i++) { J *p = cJSON_CreateObject(); setstr(p, "item", "stall_fence"); setnum(p, "x", (eq(home, "coop") ? COOP : BARN)[i]); setnum(p, "y", 4); cJSON_AddItemToArray(own, p); }
+            if (has(jget(jget(state, "farmTech"), home), "water")) { J *p = cJSON_CreateObject(); setstr(p, "item", "barrel_water"); setnum(p, "x", num(interior, "w")); setnum(p, "y", 4); cJSON_AddItemToArray(own, p); }
+            placed = own; wall = floor_ = "stone";
+        }
+        world->map = buildRoom(num(interior, "w"), num(interior, "d"), wall, floor_, placed, false);
+        cJSON_Delete(own);
+        J *w = cJSON_Parse("{\"type\":\"warp\",\"w\":1,\"h\":1}"), *sp = cJSON_CreateObject();
+        setstr(w, "to", back);
         setnum(w, "x", world->map->door.x); setnum(w, "y", world->map->door.y);
         J *door = jget(b, "door");
         setnum(sp, "x", door ? num(door, "x") + 0.5 : num(b, "x") + num(b, "w") / 2);
-        setnum(sp, "y", num(b, "y") + num(b, "h") + 0.7);
+        setnum(sp, "y", home ? num(door, "y") + 0.7 : num(b, "y") + num(b, "h") + 0.7);
         cJSON_AddItemToObject(w, "spawn", sp);
         addEnt(w, true);
         J *at = jget(interior, "npc");
@@ -1035,7 +1275,7 @@ static void enterMap(const char *id, bool hasSpawn, double sx, double sy) {
     if (cJSON_IsObject(dsp) && blocked(feetBox(player.x, player.y))) { player.x = num(dsp, "x") * 16; player.y = num(dsp, "y") * 16; }
     mascot.x = player.x; mascot.y = player.y;
     fishing.on = false; player.acting = false;
-    if (eq(id, "farm")) spawnAnimals();
+    spawnAnimals();
     spawnForage();
     warpLock = 0.5;
     changed();
@@ -1098,11 +1338,23 @@ void game_goTo(const char *id) { goTo(id, false, 0, 0); }
 void game_goHere(void) { goTo(world->id, true, player.x / 16, player.y / 16); }
 const char *game_worldId(void) { return world ? world->id : ""; }
 
+// Where an animal wanders, in tiles: its pen on the farm, or its building's floor (minus the back-wall row).
+static Rect penFor(J *a) {
+    if (eq(world->id, "farm")) { J *pen = jget(jget(T("BUILDINGS"), str(jget(T("ANIMALS"), str(a, "kind")), "home")), "pen"); return (Rect){ num(pen, "x"), num(pen, "y"), num(pen, "w"), num(pen, "h") }; }
+    Rect f = world->map->floor;
+    return (Rect){ f.x, f.y + 1, f.w, f.h - 1 };
+}
+// Animals on this map get a spot in their pen; the rest are off-screen (no px). ponytail: at 19:00/6:00 they
+// just pop between the pen and the building; walking to the door can come later if it's missed.
+static char animalMaps[512];
+static void animalMapsKey(char *out, size_t n) { out[0] = 0; JFOR(a, jget(state, "animals")) { strncat(out, animalMap(state, a), n - strlen(out) - 1); strncat(out, ",", n - strlen(out) - 1); } }
 static void spawnAnimals(void) {
+    animalMapsKey(animalMaps, sizeof animalMaps);
     JFOR(a, jget(state, "animals")) {
-        J *pen = jget(jget(T("BUILDINGS"), str(jget(T("ANIMALS"), str(a, "kind")), "home")), "pen");
-        setnum(a, "px", (num(pen, "x") + 0.5 + frand() * (num(pen, "w") - 1)) * 16);
-        setnum(a, "py", (num(pen, "y") + 0.8 + frand() * (num(pen, "h") - 1)) * 16);
+        if (!eq(animalMap(state, a), world->id)) { delkey(a, "px"); delkey(a, "py"); continue; }
+        Rect pen = penFor(a);
+        setnum(a, "px", (pen.x + 0.5 + frand() * (pen.w - 1)) * 16);
+        setnum(a, "py", (pen.y + 0.8 + frand() * (pen.h - 1)) * 16);
         setnum(a, "tx", num(a, "px")); setnum(a, "ty", num(a, "py"));
         setstr(a, "dir", "left"); setnum(a, "wait", frand() * 3); setnum(a, "t", frand() * 4);
     }
@@ -1199,15 +1451,17 @@ static void updateNpcs(double dt) {
 }
 
 static void updateAnimals(double dt) {
+    char key[512]; animalMapsKey(key, sizeof key);
+    if (strcmp(key, animalMaps)) spawnAnimals();
     JFOR(a, jget(state, "animals")) {
         if (!cJSON_IsNumber(jget(a, "px"))) continue;
         setnum(a, "t", num(a, "t") + dt);
         if (num(a, "wait") > 0) { setnum(a, "wait", num(a, "wait") - dt); continue; }
         double dx = num(a, "tx") - num(a, "px"), dy = num(a, "ty") - num(a, "py"), d = hypot(dx, dy);
         if (d < 1) {
-            J *pen = jget(jget(T("BUILDINGS"), str(jget(T("ANIMALS"), str(a, "kind")), "home")), "pen");
-            setnum(a, "tx", (num(pen, "x") + 0.5 + frand() * (num(pen, "w") - 1)) * 16);
-            setnum(a, "ty", (num(pen, "y") + 0.8 + frand() * (num(pen, "h") - 1)) * 16);
+            Rect pen = penFor(a);
+            setnum(a, "tx", (pen.x + 0.5 + frand() * (pen.w - 1)) * 16);
+            setnum(a, "ty", (pen.y + 0.8 + frand() * (pen.h - 1)) * 16);
             setnum(a, "wait", 1 + frand() * 4);
             continue;
         }
@@ -1263,7 +1517,9 @@ static void drawEntity(Ent *e) {
     if (eq(e->type, "building")) {
         Img *im = I(str(d, "img"));
         BRect r = buildingRect(d, im);
+        cv_alpha(seeThrough(r.dx, r.dy, r.sw, e->hasCol ? e->col.y + e->col.h : r.dy + r.sh));
         cv_image(im, r.sx, 0, r.sw, r.sh, r.dx, r.dy, r.sw, r.sh);
+        cv_alpha(1);
         int i = 0;
         JFOR(id, jget(d, "goods")) drawItem(id->valuestring, r.dx + 2 + i++ * 15, r.dy + 21);   // wares on the counter
     } else if (eq(e->type, "deco")) {
@@ -1335,8 +1591,45 @@ static void itemPos(J *m, double *x, double *y) {
     *y = jround((fy + (num(m, "y") - fy) * k) * 16) - 3;
 }
 
+// Which side a belt is fed from (0 up,1 down,2 left,3 right = where cargo comes FROM), or -1 for straight:
+// fed from behind → straight; otherwise a piece handing it items from a side makes a curve. Feeders: belts,
+// tunnels, arms (ahead), sorters/splitters (ahead or to a side), machine/dock/collector outputs.
+static bool feedsTile(J *n, int x, int y) {
+    if (!n) return false;
+    const char *t = str(n, "type");
+    int d = dirFrom(str(n, "dir")), nx = num(n, "x"), ny = num(n, "y");
+    if (eq(t, "belt") || eq(t, "tunnel") || eq(t, "arm")) return nx + DV[d][0] == x && ny + DV[d][1] == y;
+    static const int SIDE2[4][2] = { [UP] = { LEFT, RIGHT }, [DOWN] = { RIGHT, LEFT }, [LEFT] = { DOWN, UP }, [RIGHT] = { UP, DOWN } };
+    if (eq(t, "sorter")) { int sd = SIDE2[d][eq(str(n, "side"), "right") ? 1 : 0]; return (nx + DV[d][0] == x && ny + DV[d][1] == y) || (nx + DV[sd][0] == x && ny + DV[sd][1] == y); }
+    if (eq(t, "splitter")) { for (int i = 0; i < 2; i++) { int sd = SIDE2[d][i]; if (nx + DV[sd][0] == x && ny + DV[sd][1] == y) return true; } return false; }
+    J *def = mdef(n);
+    if (jget(def, "recipes") || jget(def, "produce") || has(def, "dock") || eq(t, "collector")) { Tile oc = outputCell(n); return oc.x == x && oc.y == y; }
+    return false;
+}
+static int beltInSide(J *m) {
+    int x = num(m, "x"), y = num(m, "y"), d = dirFrom(str(m, "dir")), b = BACK_DIR[d];
+    J *back = machineAt(state, x + DV[b][0], y + DV[b][1]);
+    if (back != m && feedsTile(back, x, y)) return -1;
+    for (int s = 0; s < 4; s++) {
+        if (s == d || s == b) continue;
+        J *n = machineAt(state, x + DV[s][0], y + DV[s][1]);
+        if (n != m && feedsTile(n, x, y)) return s;   // cargo comes from side s
+    }
+    return -1;
+}
 static void drawBelt(J *m) {
     int f = (int)floor(gtime * 16) % 8;   // texture scrolls at the items' speed (1 tile per step)
+    int in = beltInSide(m);
+    if (in >= 0) {
+        // curves come from the pack's 2x2 turntables: each quadrant is a corner; the first square turns clockwise,
+        // the second counter-clockwise. Sides: 0 top, 1 bottom, 2 left, 3 right (UP/DOWN/LEFT/RIGHT).
+        int out = dirFrom(str(m, "dir"));
+        int h = in == LEFT || in == RIGHT ? in : out, v = in == UP || in == DOWN ? in : out;   // the horizontal and vertical open sides
+        int qx = h == RIGHT ? 0 : 16, qy = v == DOWN ? 0 : 16;
+        bool cw = (in == DOWN && out == RIGHT) || (in == LEFT && out == DOWN) || (in == UP && out == LEFT) || (in == RIGHT && out == UP);
+        cv_image(I(TF "Conveyor_Belt.png"), f * 96 + (cw ? 0 : 32) + qx, qy, 16, 16, num(m, "x") * 16, num(m, "y") * 16, 16, 16);
+        return;
+    }
     cv_save();
     cv_translate(num(m, "x") * 16 + 8, num(m, "y") * 16 + 8);
     cv_rotate(ANGLE[dirFrom(str(m, "dir"))]);
@@ -1349,9 +1642,18 @@ static void drawFlatPiece(J *m) {
     int dir = dirFrom(str(m, "dir"));
     cv_save();
     cv_translate(cx, cy);
-    if (eq(str(m, "type"), "splitter")) { cv_rotate(ANGLE[dir] + M_PI / 2); cv_draw(I(TF "Splitter_A.png"), -24, -24); }
+    bool sorter = eq(str(m, "type"), "sorter");
+    if (eq(str(m, "type"), "splitter") || sorter) { cv_rotate(ANGLE[dir] + M_PI / 2); cv_draw(I(sorter ? TF "Splitter_B.png" : TF "Splitter_A.png"), -24, -24); }
     else { cv_rotate(ANGLE[dir] + M_PI); cv_image(I(TF "Underground_Belt_A.png"), 16, 8, 16, 24, -8, -12, 16, 24); }   // underground belt, rotated
     cv_restore();
+    if (sorter && str(m, "filter")) {
+        // the sorter: its filter's icon, and a green arrow on the edge the filtered item turns to (UI_Icons row 9)
+        cv_alpha(0.9f); drawItem(str(m, "filter"), cx - 8, cy - 9); cv_alpha(1);
+        static const int SIDE2[4][2] = { [UP] = { LEFT, RIGHT }, [DOWN] = { RIGHT, LEFT }, [LEFT] = { DOWN, UP }, [RIGHT] = { UP, DOWN } };
+        int turn = SIDE2[dir][eq(str(m, "side"), "right") ? 1 : 0];
+        static const int ARROW[4][3] = { [UP] = { 2, 0, -10 }, [DOWN] = { 5, 0, 10 }, [LEFT] = { 8, -10, 0 }, [RIGHT] = { 11, 10, 0 } };
+        cv_image(I("assets/Cute_Fantasy_UI/UI/UI_Icons.png"), ARROW[turn][0] * 16, 9 * 16, 16, 16, cx - 8 + ARROW[turn][1], cy - 8 + ARROW[turn][2], 16, 16);
+    }
 }
 // belt items go after all belts, so one sliding in from the next tile isn't covered by that belt
 static void drawBeltItems(J **list, int n) {
@@ -1359,14 +1661,88 @@ static void drawBeltItems(J **list, int n) {
 }
 
 // arms reach over their neighbours, so they draw after the machines they feed and take from
-static double mbottom(J *m) { return (num(m, "y") + num(mdef(m), "size")) * 16 - 1; }
+static double mbottom(J *m) { return (num(m, "y") + rows(str(m, "type"))) * 16 - 1; }
+// an arm sorts in front of the low pieces it works with, but behind tall warehouses (its claw reaches behind the wall)
 static double machineY(J *st, J *m) {
     double y = mbottom(m);
     if (eq(str(m, "type"), "arm")) {
         int dir = dirFrom(str(m, "dir")), ds[2] = { dir, BACK_DIR[dir] };
-        for (int i = 0; i < 2; i++) { J *n = machineAt(st, num(m, "x") + DV[ds[i]][0], num(m, "y") + DV[ds[i]][1]); if (n && !isFlat(n)) y = fmax(y, mbottom(n)) + 0.5; }
+        for (int i = 0; i < 2; i++) { J *n = machineAt(st, num(m, "x") + DV[ds[i]][0], num(m, "y") + DV[ds[i]][1]); if (n && !isFlat(n) && !has(mdef(n), "store")) y = fmax(y, mbottom(n)) + 0.5; }
+        for (int k = 0; k < 4; k++) { J *n = machineAt(st, num(m, "x") + DV[k][0], num(m, "y") + DV[k][1]); if (n && has(mdef(n), "store")) y = fmin(y, mbottom(n) - 0.5); }
     }
     return y;
+}
+
+// Tall art fades when the player walks behind it, and while building on the farm (so belts behind roofs show).
+static float seeThrough(double x, double top, double w, double bottom) {
+    if (eq(str(state, "tool"), "build") && eq(world->id, "farm")) return 0.55f;
+    return player.x > x + 2 && player.x < x + w - 2 && player.y < bottom - 2 && player.y > top + 10 ? 0.45f : 1;
+}
+// Cooking stations: pack art bottom-centred on the footprint (the mill: Windmill.png tower + turning sails).
+#define ID_ART "assets/Cute_Fantasy/Buildings/House_Decor/Indoor_Decor.png"
+#define DR_ART "assets/Cute_Fantasy/Buildings/House_Decor/Drawers.png"
+static void drawStation(J *m) {
+    const char *type = str(m, "type");
+    double x = num(m, "x") * 16, y = num(m, "y") * 16;
+    int n = num(mdef(m), "size"), h = rows(type);
+    if (eq(type, "mill")) {
+        double dx = x + (n * 16 - 64) / 2.0, dy = (num(m, "y") + n) * 16 - 112;
+        cv_alpha(seeThrough(dx, dy, 64, (num(m, "y") + n) * 16));
+        cv_image(I(str(mdef(m), "img")), 0, 0, 64, 112, dx, dy, 64, 112);
+        int f = stationQueued(m) ? (int)floor(gtime * 6) % 4 : 0;
+        cv_image(I("assets/Cute_Fantasy/Buildings/Buildings/Unique_Buildings/Windmill/Windmill_Sail_Anim.png"), f * 64, 0, 64, 80, dx, dy - 4, 64, 80);
+        cv_alpha(1);
+        return;
+    }
+    const char *k = cookState(state, m);
+    bool on = eq(k, "cooking") || eq(k, "ready");
+    double base = (num(m, "y") + h) * 16;
+    // [image, sx, sy, w, h, ox, oy]
+    typedef struct { const char *src; int sx, sy, w, h, ox, oy; } Part;
+    Part parts[2] = { 0 };
+    int np = 1;
+    if (eq(type, "stove")) parts[0] = (Part){ ID_ART, 32, on ? 39 : 7, 16, 24 };
+    else if (eq(type, "oven")) parts[0] = (Part){ "assets/Cute_Fantasy/Buildings/House_Decor/Furnace_Anim.png", on ? 16 * (1 + (int)floor(gtime * 8) % 4) : 0, 0, 16, 32 };
+    else if (eq(type, "kitchen")) { parts[0] = (Part){ DR_ART, 48, 0, 16, 16, -8 }; parts[1] = (Part){ DR_ART, 0, 48, 16, 16, 8 }; np = 2; }
+    else if (eq(type, "workbench")) { parts[0] = (Part){ "assets/Cute_Fantasy/Buildings/House_Decor/Tables.png", 64, 11, 32, 21 }; parts[1] = (Part){ "assets/Cute_Fantasy/Outdoor decoration/Camp_Decor.png", 64, 0, 16, 16, 6, -10 }; np = 2; }
+    else if (eq(type, "tub")) parts[0] = (Part){ "assets/Cute_Fantasy/Outdoor decoration/barrels.png", stationQueued(m) ? 0 : 48, 0, 16, 32 };
+    else np = 0;
+    for (int i = 0; i < np; i++) cv_image(I(parts[i].src), parts[i].sx, parts[i].sy, parts[i].w, parts[i].h, jround(x + n * 8 - parts[i].w / 2.0 + parts[i].ox), base - parts[i].h + parts[i].oy, parts[i].w, parts[i].h);
+    if (!np) { Img *im = sprite(type); cv_draw(im, x + (n * 16 - im->w) / 2.0, base - im->h); }   // the cheese press (pixel art)
+    if (eq(type, "kitchen") && stationQueued(m)) drawItem("dough", x + 10, y - 4);
+    if (eq(k, "burnt") && (int)floor(gtime * 3) % 2) fx_puff(x + n * 8, y - 4, 0x3a3036ff, 1);
+    if (eq(k, "ready")) drawItem(str(jget(jget(m, "st"), "cooking"), "out"), x + n * 8 - 8, y - 22 + jround(sin(gtime * 3)));
+}
+
+// Drones fly above everything: their sim position moves half a tile a step, the drawing eases toward it.
+static struct { J *d; double x, y; } droneSeen[24]; static int ndroneSeen;
+static void drawDrones(void) {
+    JFOR(m, jget(state, "machines")) JFOR(d, jget(m, "drones")) {
+        int i = 0; while (i < ndroneSeen && droneSeen[i].d != d) i++;
+        if (i == ndroneSeen) { if (ndroneSeen == 24) continue; ndroneSeen++; droneSeen[i].d = d; droneSeen[i].x = num(d, "x"); droneSeen[i].y = num(d, "y"); }
+        droneSeen[i].x += (num(d, "x") - droneSeen[i].x) * 0.15; droneSeen[i].y += (num(d, "y") - droneSeen[i].y) * 0.15;
+        int x = jround(droneSeen[i].x * 16 + 8), y = jround(droneSeen[i].y * 16 + 8);
+        int lift = eq(str(d, "state"), "home") ? 2 : 12 + (int)jround(sin(gtime * 4 + num(m, "id")) * 2);
+        fx_shadow(x, y + 6, 8);
+        cv_draw(sprite((int)floor(gtime * 20) % 2 ? "drone" : "drone2"), x - 8, y - lift - 7);
+        J *carry = jget(d, "carry"); if (jlen(carry)) drawItem(jat(carry, 0)->valuestring, x - 8, y - lift + 2);
+    }
+}
+// A bubble over every piece with a problem (its menu says why). Icons from UI_Icons.png [col, row].
+static void drawIssues(void) {
+    static const struct { const char *code; int c, r; } ICON[] = { { "nopower", 11, 0 }, { "nofuel", 12, 2 }, { "full", 12, 2 }, { "refused", 13, 5 }, { "blocked", 9, 6 }, { "idle", 12, 3 } };
+    Img *ui = I("assets/Cute_Fantasy_UI/UI/UI_Icons.png");
+    char text[200];
+    JFOR(m, jget(state, "machines")) {
+        const char *code = machineIssue(state, m, text, sizeof text);
+        if (!code) continue;
+        int c = 12, r = 2;
+        for (size_t k = 0; k < sizeof ICON / sizeof *ICON; k++) if (eq(ICON[k].code, code)) { c = ICON[k].c; r = ICON[k].r; }
+        int n = num(mdef(m), "size");
+        double x = num(m, "x") * 16 + n * 8 - 8, y = num(m, "y") * 16 - (isFlat(m) ? 12 : 20) + jround(sin(gtime * 4 + num(m, "id")) * 1.5);
+        cv_fill(x + 2, y + 1, 12, 14, css("rgba(42,36,64,0.5)")); cv_fill(x + 1, y + 2, 14, 12, css("rgba(42,36,64,0.5)"));
+        cv_image(ui, c * 16, r * 16, 16, 16, x, y, 16, 16);
+    }
 }
 
 void drawMachine(J *m) {
@@ -1392,6 +1768,22 @@ void drawMachine(J *m) {
         return;
     }
     if (eq(type, "pole")) { cv_draw(I(str(def, "img")), mx * 16 - 8, (my + 1) * 16 - 48); return; }
+    if (has(def, "station")) { drawStation(m); return; }
+    if (has(def, "vine")) {
+        // Grapes_Bower.png: 3 growing frames on top, grown and fruiting below (96x80 each); bottom-centred on its 2 tiles
+        J *stt = jget(m, "st"); double age = num(stt, "age");
+        int fx = has(stt, "fruit") ? 96 : age >= 7 ? 0 : age >= 5 ? 192 : age >= 3 ? 96 : 0, fy = has(stt, "fruit") || age >= 7 ? 80 : 0;
+        cv_image(I(str(def, "img")), fx, fy, 96, 80, mx * 16 + 16 - 48, (my + 2) * 16 - 80 + 10, 96, 80);
+        return;
+    }
+    if (has(def, "fixed")) {   // granja feeder (pixel trough) / collector (metal crate)
+        J *ic = jget(def, "icon");
+        if (str(ic, "pixel")) cv_draw(sprite(str(ic, "pixel")), mx * 16, my * 16);
+        else cv_image(I(str(ic, "src")), num(ic, "sx"), num(ic, "sy"), 16, 16, mx * 16, my * 16, 16, 16);
+        J *out = jget(m, "out"); if (jlen(out)) drawItem(jat(out, 0)->valuestring, mx * 16, my * 16 - 12);
+        return;
+    }
+    if (has(def, "dock")) { cv_draw(sprite("dock"), mx * 16, my * 16); J *out = jget(m, "out"); if (jlen(out)) drawItem(jat(out, 0)->valuestring, mx * 16 + 8, my * 16 - 14); return; }
     int n = num(def, "size");
     if (n == 1) {
         char k[48]; snprintf(k, sizeof k, "machine_%s", type);
@@ -1406,11 +1798,19 @@ void drawMachine(J *m) {
     int runFrames = num(def, "runFrames");
     double fw = running ? im->w / (double)runFrames : im->w, fh = im->h;
     int f = running ? (int)floor(gtime * 6) % runFrames : 0;
+    cv_alpha(fh > n * 16 + 8 ? seeThrough(mx * 16 + (n * 16 - fw) / 2, (my + n) * 16 - fh, fw, (my + n) * 16) : 1);
     cv_image(im, f * fw, 0, fw, fh, mx * 16 + (n * 16 - fw) / 2, (my + n) * 16 - fh, fw, fh);
+    cv_alpha(1);
+    if (has(def, "store")) {
+        // cargo ports, bottom row: an orange underground-belt mouth takes cargo in on the left, a grey one hands it
+        // out on the right (both arrows point right, the way cargo flows); the output filter's icon over the grey one
+        cv_image(I(TF "Underground_Belt_B.png"), 16, 41, 16, 23, mx * 16, (my + n) * 16 - 23, 16, 23);
+        cv_image(I(TF "Underground_Belt_A.png"), 16, 41, 16, 23, (mx + n - 1) * 16, (my + n) * 16 - 23, 16, 23);
+        if (str(m, "outFilter")) drawItem(str(m, "outFilter"), (mx + n - 1) * 16, (my + n) * 16 - 36);
+        return;
+    }
     J *out = jget(m, "out");
     if (jlen(out)) drawItem(jat(out, 0)->valuestring, mx * 16 + (n * 8 - 8), my * 16 - 24 + jround(sin(gtime * 3)));
-    if (has(m, "unpowered") && (int)floor(gtime * 2) % 2)
-        cv_image(I("assets/Cute_Fantasy_UI/UI/UI_Icons.png"), 11 * 16, 0, 16, 16, mx * 16 + n * 8 - 8, (my + n) * 16 - fh - 14, 16, 16);
 }
 
 static void drawAnimal(J *a) {
@@ -1513,9 +1913,10 @@ static void draw(void) {
         JFOR(t, jget(state, "soil")) if (str(t, "crop")) { int x, y; sscanf(t->string, "%d,%d", &x, &y); ADD((y + 1) * 16 - 2, D_CROP, t); }
         J *bs[8]; int nb = builtBuildings(bs);
         for (int i = 0; i < nb; i++) ADD(builtCol[i].y + builtCol[i].h, D_BUILT, bs[i]);
-        JFOR(a, jget(state, "animals")) if (cJSON_IsNumber(jget(a, "px"))) ADD(num(a, "py"), D_ANIMAL, a);
+
         JFOR(m, jget(state, "machines")) if (!isFlat(m)) ADD(machineY(state, m), D_MACHINE, m);
     }
+    JFOR(a, jget(state, "animals")) if (cJSON_IsNumber(jget(a, "px"))) ADD(num(a, "py"), D_ANIMAL, a);   // any map: pens and interiors
     ADD(player.y, D_PLAYER, NULL);
     if (mascotOf(state)) ADD(mascot.y, D_MASCOT, NULL);
     qsort(list, n, sizeof(Draw), cmpDraw);
@@ -1542,7 +1943,7 @@ static void draw(void) {
 
     // the rod sprite draws the line, bobber and splash itself; only the "!" goes on top
     if (fishing.on && eq(fishing.phase, "bite")) cv_draw(sprite("bang"), jround(player.x) - 2, jround(player.y) - 40);
-    if (eq(world->id, "farm")) drawSprays();
+    if (eq(world->id, "farm")) { drawSprays(); drawDrones(); drawIssues(); }
     fx_drawWorld();
     fx_drawAmbient();
     for (int i = 0; i < nbubbles; i++) cv_draw(sprite(bubbles[i].sprite), jround(bubbles[i].x) - 3, jround(bubbles[i].y - (1.2 - bubbles[i].t) * 8));
@@ -1554,23 +1955,36 @@ static void draw(void) {
         if (bp && eq(world->id, "farm")) {
             PlanPiece plan[64]; int np = blueprintPlan(bp, t, plan);
             for (int i = 0; i < np; i++) {
-                int sz = num(jget(T("MACHINES"), plan[i].type), "size");
+                int sz = num(jget(T("MACHINES"), plan[i].type), "size"), sh = rows(plan[i].type);
                 char k[48]; snprintf(k, sizeof k, "machine_%s", plan[i].type);
                 cv_alpha(0.55);
-                drawItem(k, plan[i].x * 16 + (sz - 1) * 8, plan[i].y * 16 + (sz - 1) * 8);
+                drawItem(k, plan[i].x * 16 + (sz - 1) * 8, plan[i].y * 16 + (sh - 1) * 8);
                 cv_alpha(1);
-                cv_fill(plan[i].x * 16, plan[i].y * 16, sz * 16, sz * 16, eq(plan[i].st, "ok") ? css("rgba(99,199,77,0.3)") : eq(plan[i].st, "missing") ? css("rgba(254,174,52,0.35)") : css("rgba(228,59,68,0.3)"));
+                cv_fill(plan[i].x * 16, plan[i].y * 16, sz * 16, sh * 16, eq(plan[i].st, "ok") ? css("rgba(99,199,77,0.3)") : eq(plan[i].st, "missing") ? css("rgba(254,174,52,0.35)") : css("rgba(228,59,68,0.3)"));
             }
             fx_cursor(t.x, t.y, gtime, true, 1, 1);
         } else if (eq(str(state, "tool"), "build") && str(state, "build") && eq(world->id, "farm")) {
             const char *b = str(state, "build");
-            int sz = num(jget(T("MACHINES"), b), "size");
+            J *bd = jget(T("MACHINES"), b);
+            int sz = num(bd, "size"), sh = rows(b);
             bool ok = canPlace(state, b, t.x, t.y, freeForBuild);
-            cv_fill(t.x * 16, t.y * 16, sz * 16, sz * 16, ok ? css("rgba(99,199,77,0.3)") : css("rgba(228,59,68,0.3)"));
-            fx_cursor(t.x, t.y, gtime, ok, sz, sz);
-            static const char *NO_DIR[] = { "chest", "autosell", "sprinkler", "solar", "pole", "steam" };
+            cv_fill(t.x * 16, t.y * 16, sz * 16, sh * 16, ok ? css("rgba(99,199,77,0.3)") : css("rgba(228,59,68,0.3)"));
+            fx_cursor(t.x, t.y, gtime, ok, sz, sh);
+            if (has(bd, "power") || num(bd, "generator") || eq(b, "pole")) {
+                // where power reaches now (each lit generator or linked pole covers SUPPLY_RANGE tiles around it)
+                J *nodes[64]; int nn = powerNodes(state, nodes, 64);
+                for (int i = 0; i < nn; i++) {
+                    int ps = num(mdef(nodes[i]), "size"), r = SUPPLY_RANGE;
+                    double x0 = (num(nodes[i], "x") - r) * 16, y0 = (num(nodes[i], "y") - r) * 16, w = (ps + 2 * r) * 16;
+                    cv_fill(x0, y0, w, w, css("rgba(242,193,78,0.13)"));
+                    cv_fill(x0, y0, w, 1, css("rgba(242,193,78,0.55)")); cv_fill(x0, y0 + w - 1, w, 1, css("rgba(242,193,78,0.55)"));
+                    cv_fill(x0, y0, 1, w, css("rgba(242,193,78,0.55)")); cv_fill(x0 + w - 1, y0, 1, w, css("rgba(242,193,78,0.55)"));
+                }
+            }
+            static const char *NO_DIR[] = { "chest", "autosell", "sprinkler", "solar", "pole", "steam", "silo", "cold", "cellar", "shed",
+                                            "workbench", "mill", "kitchen", "oven", "stove", "tub", "press", "vine" };
             bool nodir = false;
-            for (int i = 0; i < 6; i++) nodir |= eq(b, NO_DIR[i]);
+            for (size_t i = 0; i < sizeof NO_DIR / sizeof *NO_DIR; i++) nodir |= eq(b, NO_DIR[i]);
             if (!nodir) { Tile o = outputCellOf(b, t.x, t.y, player.dir); cv_fill(o.x * 16 + 6, o.y * 16 + 6, 4, 4, css("rgba(255,255,255,0.6)")); }
         } else if (!(in.held & (BTN_UP | BTN_DOWN | BTN_LEFT | BTN_RIGHT))) fx_cursor(t.x, t.y, gtime, true, 1, 1);
     }
@@ -1631,6 +2045,7 @@ void game_frame(double dt) {
 
     double dx = ((in.held & BTN_RIGHT) ? 1 : 0) - ((in.held & BTN_LEFT) ? 1 : 0), dy = ((in.held & BTN_DOWN) ? 1 : 0) - ((in.held & BTN_UP) ? 1 : 0);
     bool stick = dx || dy;
+    unstick();
     double px0 = player.x, py0 = player.y;
     if (!isBusy()) {
         if (fishing.on) {
@@ -1645,7 +2060,7 @@ void game_frame(double dt) {
     setMusicMood(eq(world->id, "mine") ? "mine" : eq(world->id, "town") && isFestival(state) ? "festival" : num(state, "time") >= 20 * 60 ? "night" : seasonId(state));
     if (!isBusy() && npopups) { Popup fn = popups[0].fn; char arg[64]; memcpy(arg, popups[0].arg, 64); memmove(popups, popups + 1, --npopups * sizeof popups[0]); fn(arg); }
     updateNpcs(dt);
-    if (eq(world->id, "farm")) updateAnimals(dt);
+    updateAnimals(dt);
     updateMascot(dt);
     // sprinklers spraying in daylight keep their 8 tiles wet (they also water overnight)
     if (spraying() && floor(gtime) != floor(gtime - dt))
@@ -1733,8 +2148,8 @@ void game_boot(void) {
     loadPlayerSprites();
     plog("boot: player %.0f ms", profNow());
     player = (Player){ .dir = DOWN };
-    const char *id = jget(T("MAPS"), str(state, "map")) ? str(state, "map") : "farm";
-    char mid[16]; snprintf(mid, sizeof mid, "%s", id);
+    const char *id = jget(T("MAPS"), str(state, "map")) || !strncmp(str(state, "map") ? str(state, "map") : "", "store:", 6) ? str(state, "map") : "farm";
+    char mid[24]; snprintf(mid, sizeof mid, "%s", id);
     bool hasPos = cJSON_IsNumber(jget(state, "px"));
     enterMap(mid, true, hasPos ? num(state, "px") / 16 : num(jget(jget(T("MAPS"), mid), "spawn"), "x"), hasPos ? num(state, "py") / 16 : num(jget(jget(T("MAPS"), mid), "spawn"), "y"));
     plog("boot: map %.0f ms", profNow());
@@ -1761,8 +2176,8 @@ void game_reload(void) {
     fishing.on = false; transitioning = false; nbubbles = 0; simAcc = 0;
     decor.on = false; decor.carrying = false; decor.item[0] = 0; hud_decor(false);
     player = (Player){ .dir = DOWN };
-    const char *id = jget(T("MAPS"), str(state, "map")) ? str(state, "map") : "farm";
-    char mid[16]; snprintf(mid, sizeof mid, "%s", id);
+    const char *id = jget(T("MAPS"), str(state, "map")) || !strncmp(str(state, "map") ? str(state, "map") : "", "store:", 6) ? str(state, "map") : "farm";
+    char mid[24]; snprintf(mid, sizeof mid, "%s", id);
     bool hasPos = cJSON_IsNumber(jget(state, "px"));
     enterMap(mid, true, hasPos ? num(state, "px") / 16 : num(jget(jget(T("MAPS"), mid), "spawn"), "x"), hasPos ? num(state, "py") / 16 : num(jget(jget(T("MAPS"), mid), "spawn"), "y"));
     setnum(state, "energy", fmin(num(state, "energy"), maxEnergy(state)));

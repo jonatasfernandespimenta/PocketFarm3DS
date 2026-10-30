@@ -64,6 +64,13 @@ static int talked(J *s) {
 }
 static int crops(J *s) { int n = 0; JFOR(id, table("CROP_IDS")) n += count(s, id->valuestring); return n; }
 static int houseCount(J *s) { return jlen(jget(jget(s, "house"), "placed")); }
+// ---- port industrial: B ----
+static bool placed4(J *s, const char *a, const char *b, const char *c, const char *d) {
+    JFOR(m, jget(s, "machines")) { const char *t = str(m, "type"); if (eq(t, a) || eq(t, b) || eq(t, c) || eq(t, d)) return true; }
+    return false;
+}
+static bool anyGranja(J *s) { JFOR(t, jget(s, "farmTech")) if (has(t, "feeder") || has(t, "belt")) return true; return false; }
+// ---- end port industrial: B ----
 
 // ---------- per-quest functions ----------
 static bool check(J *s, const char *id, bool *hasCheck) {
@@ -83,6 +90,14 @@ static bool check(J *s, const char *id, bool *hasCheck) {
     if (eq(id, "trail")) return has(jget(s, "projects"), "trail");
     if (eq(id, "forest")) return stat(s, "foraged") >= 5;
     if (eq(id, "festival")) return has(jget(s, "flags"), "festival");
+    // industrialization (fase 6)
+    if (eq(id, "bread")) return stat(s, "baked") >= 1;
+    if (eq(id, "storage")) return stat(s, "stored") >= 20;
+    if (eq(id, "wine")) return countAll(s, "wine") > 0;
+    if (eq(id, "sorting")) return stat(s, "sorted") >= 10;
+    if (eq(id, "drones")) return stat(s, "droneHarvest") >= 20;
+    if (eq(id, "auto")) return stat(s, "foodMade") >= 10;
+    if (eq(id, "granja")) return anyGranja(s);
     *hasCheck = false;
     return false;
 }
@@ -102,7 +117,11 @@ const char *questProgress(J *s, J *q, char *buf, int n) {
     if (eq(id, "power")) return fmtp(buf, n, stat(s, "poweredWork"), 3);
     if (eq(id, "logistics")) return fmtp(buf, n, stat(s, "routed"), 10);
     if (eq(id, "forest")) return fmtp(buf, n, stat(s, "foraged"), 5);
-    return NULL;   // project, coop, machine, trail, festival: ''
+    if (eq(id, "storage")) return fmtp(buf, n, stat(s, "stored"), 20);
+    if (eq(id, "sorting")) return fmtp(buf, n, stat(s, "sorted"), 10);
+    if (eq(id, "drones")) return fmtp(buf, n, stat(s, "droneHarvest"), 20);
+    if (eq(id, "auto")) return fmtp(buf, n, stat(s, "foodMade"), 10);
+    return NULL;   // project, coop, machine, trail, festival, bread, wine, granja: ''
 }
 
 // questQuery().npc(name): live position when they're on this map, else their usual spot
@@ -141,6 +160,10 @@ bool questHint(J *s, J *q, Hint *out) {
     if (eq(id, "coop")) return npcAt(s, "Jack", out);
     if (eq(id, "forest")) return eq(where, "forest") ? false : at(out, "forest", 20, 2);
     if (eq(id, "festival")) return isFestival(s) ? atP(out, "town", jget(town, "gacha")) : false;
+    if (eq(id, "bread")) return npcAt(s, "Chloe", out);
+    if (eq(id, "storage")) return npcAt(s, "Jack", out);
+    if (eq(id, "wine")) return npcAt(s, "Katy", out);
+    if (eq(id, "sorting") || eq(id, "drones") || eq(id, "auto") || eq(id, "granja")) return npcAt(s, "Mike", out);
     return false;
 }
 
@@ -165,10 +188,28 @@ static bool coachDone(J *s, const char *id, int i) {
         if (i == 0) return placed2(s, "splitter", "tunnel") || routed > 0;
         return routed > 0;
     }
+    double baked = stat(s, "baked");
+    if (eq(id, "bread")) {
+        if (i == 0) return hasMachine(s, "workbench");
+        if (i == 1) return hasMachine(s, "mill") && hasMachine(s, "kitchen") && hasMachine(s, "oven");
+        if (i == 2) return countAll(s, "flour") > 0 || countAll(s, "dough") > 0 || countAll(s, "kneaded") > 0 || baked > 0;
+        if (i == 3) return countAll(s, "kneaded") > 0 || baked > 0;
+        return baked > 0;
+    }
+    if (eq(id, "storage")) {
+        if (i == 0) return placed4(s, "silo", "cold", "cellar", "shed");
+        return stat(s, "stored") > 0;
+    }
     return true;
 }
 
 // ---------- exports ----------
+// A quest is open once the one before it is done: its system unlocks (shops sell its pieces) from then on.
+bool questOpen(J *s, const char *id) {
+    J *done = jget(jget(s, "quests"), "done"), *q = NULL;
+    JFOR(x, table("QUESTS")) if (eq(str(x, "id"), id)) { q = x; break; }
+    return has(done, id) || (has(s, "tutorialDone") && (!str(q, "after") || has(done, str(q, "after"))));
+}
 int activeQuests(J *s, J **out, int max) {
     if (!has(s, "tutorialDone")) return 0;
     J *done = jget(jget(s, "quests"), "done");
