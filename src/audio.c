@@ -25,6 +25,8 @@ typedef struct {
 static Voice v[NV];
 static float sine[TBL];
 static int64_t clk;              // render clock (samples)
+static volatile unsigned ncmds, nframes;   // debug: commands rendered, ndsp frame callbacks
+static float peak;                          // debug: loudest sample since the last report
 static uint32_t arng = 0x9e3779b9;
 static volatile bool ok;         // a backend is running
 static char problem[160];        // why audio is off (3DS), for the boot toast
@@ -138,6 +140,7 @@ static void render(int16_t *dst, int N) {
         Cmd c = q[qt & (QN - 1)];
         __sync_synchronize();
         qt++;
+        ncmds++;
         if (c.op == OP_SFX) sfx_play(c.a, c.b, c.x, a_now());
         else music_op(c.op, c.a);
     }
@@ -159,6 +162,7 @@ static void render(int16_t *dst, int N) {
         if (o->pos >= o->n) o->on = 0;
     }
     for (int k = 0; k < N; k++) {   // hard clip like the WebAudio destination
+        if (fabsf(mix[k]) > peak) peak = fabsf(mix[k]);
         float s = mix[k] * 32767;
         dst[k] = s > 32767 ? 32767 : s < -32768 ? -32768 : (int16_t)s;
     }
@@ -179,7 +183,7 @@ static Thread th;
 static volatile bool run;
 static int core;
 
-static void onFrame(void *d) { LightEvent_Signal(&ev); }
+static void onFrame(void *d) { nframes++; LightEvent_Signal(&ev); }
 static void mixer(void *arg) {
     int nxt = 0, n = 0;
     u64 busy = 0;
@@ -194,9 +198,9 @@ static void mixer(void *arg) {
             nxt = (nxt + 1) % NBUF;
             if (debug && ++n % (SR * 8 / LEN) == 0) {   // every ~8 s of audio
                 int nv = 0; for (int i = 0; i < NV; i++) nv += v[i].on;
-                plog("audio: core %d, mixer %.2f%% of a core (%.3f ms per 16.7 ms frame), %d voices", core,
-                     100.0 * busy / (SYSCLOCK_ARM11 * 8.0), busy / (SYSCLOCK_ARM11 / 1000.0) / (8 * 60.0), nv);
-                busy = 0;
+                plog("audio: core %d, mixer %.2f%% of a core (%.3f ms per 16.7 ms frame), %d voices, %u cmds, %u dsp frames, peak %.3f, master %.2f, wbuf0 status %d", core,
+                     100.0 * busy / (SYSCLOCK_ARM11 * 8.0), busy / (SYSCLOCK_ARM11 / 1000.0) / (8 * 60.0), nv, ncmds, nframes, peak, 1.0, wb[0].status);
+                busy = 0; peak = 0;
             }
         }
         LightEvent_Wait(&ev);
