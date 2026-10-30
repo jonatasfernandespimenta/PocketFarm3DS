@@ -1,6 +1,7 @@
 // 3DS platform: citro2d frame, buttons, touch, SD files, log. The game draws through cv (GPU on screens).
 #include <3ds.h>
 #include <citro2d.h>
+#include <malloc.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <sys/stat.h>
@@ -70,6 +71,13 @@ static uint32_t mapKeys(u32 k) {
 }
 
 static bool debug;
+void gpu_beginFrame(void);   // cv_3ds.c
+extern unsigned long texBytes;
+static void logMem(const char *when) {
+    struct mallinfo mi = mallinfo();
+    plog("mem %s: linear free %lu KB, textures %lu KB, app free %lu KB, heap used %lu KB", when, (unsigned long)linearSpaceFree() / 1024,
+         texBytes / 1024, (unsigned long)osGetMemRegionFree(MEMREGION_APPLICATION) / 1024, (unsigned long)mi.uordblks / 1024);
+}
 bool plat_debug(void) { return debug; }
 
 int main(void) {
@@ -86,6 +94,7 @@ int main(void) {
     audio_init();   // audio: ndsp + mixer thread (runs silent without dspfirm.cdc)
     game_boot();
     plog("boot: %.0f ms", (svcGetSystemTick() - t0) / (SYSCLOCK_ARM11 / 1000.0));
+    logMem("boot");
     debug = !access("sdmc:/3ds/PocketFarm/debug", F_OK);
     bool autoGacha = !access("sdmc:/3ds/PocketFarm/gacha", F_OK);   // debug: pass the title, open the gacha, keep tapping
     u64 last = svcGetSystemTick();
@@ -97,7 +106,10 @@ int main(void) {
         if ((held & (KEY_START | KEY_SELECT)) == (KEY_START | KEY_SELECT)) break;   // quit
         touchPosition tp; hidTouchRead(&tp);
         bool touch = held & KEY_TOUCH;
-        in = (Input){ .down = mapKeys(down), .held = mapKeys(held), .touch = touch, .touchDown = down & KEY_TOUCH, .touchUp = hidKeysUp() & KEY_TOUCH, .tx = tp.px, .ty = tp.py };
+        // on the release frame the hardware reports (0,0): keep the last real position, menus act on release
+        static int ltx, lty;
+        if (touch) ltx = tp.px, lty = tp.py;
+        in = (Input){ .down = mapKeys(down), .held = mapKeys(held), .touch = touch, .touchDown = down & KEY_TOUCH, .touchUp = hidKeysUp() & KEY_TOUCH, .tx = ltx, .ty = lty };
         if (autoGacha) {
             static int f; f++;
             if (f == 60) in.down |= BTN_A;
@@ -109,11 +121,14 @@ int main(void) {
         last = now;
         u64 a = svcGetSystemTick();
         C3D_FrameBegin(C3D_FRAME_SYNCDRAW);
+        gpu_beginFrame();
         game_frame(dt);
         u64 b = svcGetSystemTick();
         C3D_FrameEnd(0);
         acc += (b - a) / (SYSCLOCK_ARM11 / 1000.0);
         extern double prof[4];
+        static int frames;   // memory in the log even without `debug`: hardware gives less than Azahar
+        if (++frames == 300 || frames % 3600 == 0) logMem("run");
         if (debug && ++frame % 120 == 0) {
             plog("cpu %.2f ms (update %.2f, draw %.2f, lights %.2f) gpu %.2f ms", acc / 120, prof[0] / 120, prof[1] / 120, prof[2] / 120, C3D_GetDrawingTime());
             acc = 0; memset(prof, 0, sizeof(double) * 4);

@@ -9,6 +9,8 @@
 #include "cv.h"
 
 typedef struct { C3D_Tex tex; int x, y, w, h; bool empty; } Chunk;
+unsigned long texBytes;   // GPU texture memory in use (debug log)
+void plog(const char *fmt, ...);
 typedef struct { int n; Chunk c[]; } Chunks;
 
 static int split(int n, int *out) {   // n → power-of-two pieces (≤ 1024, ≥ 8)
@@ -44,7 +46,12 @@ static void upload(Img *im) {
             for (int y = 0; y < vh && !any; y++) for (int x = 0; x < vw; x++) if (im->px[((y0 + y) * im->w + x0 + x) * 4 + 3]) { any = true; break; }
             c->empty = !any;
             if (c->empty) { x0 += xs[i]; continue; }
-            C3D_TexInit(&c->tex, c->w, c->h, GPU_RGBA8);
+            if (!C3D_TexInit(&c->tex, c->w, c->h, GPU_RGBA8)) {   // out of linear memory: draw nothing rather than garbage
+                static int warned;
+                if (warned++ < 8) plog("tex alloc failed %dx%d (image %dx%d), linear free %lu KB, textures %lu KB", c->w, c->h, im->w, im->h, (unsigned long)linearSpaceFree() / 1024, texBytes / 1024);
+                c->empty = true; x0 += xs[i]; continue;
+            }
+            texBytes += c->w * c->h * 4;
             C3D_TexSetFilter(&c->tex, GPU_NEAREST, GPU_NEAREST);
             C3D_TexSetWrap(&c->tex, GPU_REPEAT, GPU_REPEAT);
             swizzle(im, c);
@@ -76,7 +83,7 @@ static void swizzle(Img *im, Chunk *c) {
 void gpu_free(Img *im) {
     Chunks *cs = im->gpu;
     if (!cs) return;
-    for (int i = 0; i < cs->n; i++) if (!cs->c[i].empty) C3D_TexDelete(&cs->c[i].tex);
+    for (int i = 0; i < cs->n; i++) if (!cs->c[i].empty) { C3D_TexDelete(&cs->c[i].tex); texBytes -= cs->c[i].w * cs->c[i].h * 4; }
     free(cs);
     im->gpu = NULL;
 }
@@ -97,11 +104,20 @@ static void set_op(int op) {
     }
 }
 
-void gpu_target(Img *screen) {
-    static C3D_RenderTarget *rt[2];
-    int which = screen->w == 400 ? 0 : 1;
+static C3D_RenderTarget *rt[2];
+static C3D_RenderTarget *screenTarget(int which) {
     if (!rt[which]) rt[which] = C2D_CreateScreenTarget(which ? GFX_BOTTOM : GFX_TOP, GFX_LEFT);
-    C2D_SceneBegin(rt[which]);
+    return rt[which];
+}
+// Once per frame, right after C3D_FrameBegin: clears color AND depth of both screens. citro2d depth-tests every
+// quad, and on hardware VRAM starts with the launcher's leftovers (Azahar zeroes it), so an uncleared depth buffer
+// randomly rejects parts of the frame.
+void gpu_beginFrame(void) {
+    for (int i = 0; i < 2; i++) C2D_TargetClear(screenTarget(i), C2D_Color32(0, 0, 0, 255));
+}
+void gpu_target(Img *screen) {
+    int which = screen->w == 400 ? 0 : 1;
+    C2D_SceneBegin(screenTarget(which));
     cur_op = -2;
     set_op(OP_OVER);
 }

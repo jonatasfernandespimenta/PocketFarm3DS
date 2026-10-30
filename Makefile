@@ -26,9 +26,15 @@ $(TARGET).elf: $(OBJS) ; $(CC) $(LDFLAGS) $^ $(LIBS) -o $@
 build/$(TARGET).smdh: meta/icon.png ; smdhtool --create "PocketFarm" "A cozy pocket farm: crops, animals and factories" "Jonatas Pimenta" $< $@
 $(TARGET).3dsx: $(TARGET).elf build/$(TARGET).smdh romfs ; 3dsxtool $< $@ --smdh=build/$(TARGET).smdh --romfs=build/romfs
 build/3ds/%.o: %.c src/*.h ; @mkdir -p $(dir $@) && $(CC) $(CFLAGS) -c $< -o $@
+# make cia → PocketFarm.cia (HOME menu icon + banner, New 3DS 124 MB mode). Needs makerom and bannertool.
+BANNERTOOL ?= bannertool
+build/banner.bnr: meta/banner.png meta/banner.wav ; $(BANNERTOOL) makebanner -i meta/banner.png -a meta/banner.wav -o $@
+$(TARGET).cia: $(TARGET).3dsx build/banner.bnr
+	makerom -f cia -o $@ -elf $(TARGET).elf -rsf meta/cia.rsf -icon build/$(TARGET).smdh -banner build/banner.bnr -exefslogo -target t -DAPP_ROMFS=build/romfs
+cia: $(TARGET).cia
 clean: ; rm -rf build $(TARGET).elf $(TARGET).3dsx
 FORCE:
-.PHONY: all romfs clean pc oracle FORCE
+.PHONY: all romfs clean pc oracle cia FORCE
 
 build/pf: $(GAME) src/plat_pc.c src/*.h
 	@mkdir -p build && cc -O2 -g -Wall -Wno-unused-function -Wno-missing-braces -Isrc -Ivendor -Ivendor/cjson $(GAME) src/plat_pc.c -lm -o $@
