@@ -225,7 +225,10 @@ static bool blocked(Rect box) {
 }
 static bool freeForBuild(int x, int y) {
     Prop *p;
-    return inBounds(world->map, x, y) && !solid(x, y) && !isSolid(world->map, x, y) && !((p = propAt(world->map, x, y)) && p->hasCol);
+    // not under the player either (the web misses this: a 2x2 machine placed facing up/left traps you inside it)
+    Rect b = feetBox(player.x, player.y);
+    bool underPlayer = b.x < (x + 1) * 16 && b.x + b.w > x * 16 && b.y < (y + 1) * 16 && b.y + b.h > y * 16;
+    return inBounds(world->map, x, y) && !solid(x, y) && !isSolid(world->map, x, y) && !((p = propAt(world->map, x, y)) && p->hasCol) && !underPlayer;
 }
 
 // Where a building image is drawn, and its collider from the opaque pixels.
