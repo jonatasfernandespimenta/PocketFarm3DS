@@ -243,8 +243,9 @@ static void buildingCollider(J *e, Rect *out) {
     int rect[4] = { r.sx, 0, r.sw, r.sh };
     maskCollider(str(e, "mask") ? str(e, "mask") : "building", opaqueBox(im, rect), r.dx, r.dy, out);
 }
-// Farm buildings (coop, barn) the player has built. ponytail: like the web build, these never get a stored
-// collider (builtBuildings() makes fresh objects), so they aren't tappable and sort by their footprint.
+// Farm buildings (coop, barn) the player has built, and their colliders (same order; the web never stored these,
+// so its coop sorted by the image bottom, drawing the player behind it, and was never interactable).
+static Rect builtCol[8];
 static int builtBuildings(J **out) {
     int n = 0;
     if (!eq(world->id, "farm")) return 0;
@@ -262,7 +263,7 @@ static void addBuildingColliders(void) {
         if (m->nextra < 16) m->extra[m->nextra++] = e->col;
     }
     J *bs[8]; int n = builtBuildings(bs);
-    for (int i = 0; i < n && m->nextra < 16; i++) buildingCollider(bs[i], &m->extra[m->nextra++]);
+    for (int i = 0; i < n && m->nextra < 16; i++) buildingCollider(bs[i], &builtCol[i]), m->extra[m->nextra++] = builtCol[i];
     rebuildSolid(m);
 }
 
@@ -280,6 +281,8 @@ static Thing thingAt(int x, int y) {
         JFOR(a, jget(state, "animals")) if (cJSON_IsNumber(jget(a, "px"))) { Tile t = tileOf(num(a, "px"), num(a, "py")); if (t.x == x && t.y == y) return (Thing){ TH_ANIMAL, .j = a }; }
         J *m = machineAt(state, x, y);
         if (m) return (Thing){ TH_MACHINE, .j = m };
+        J *bs[8]; int nb = builtBuildings(bs);
+        for (int i = 0; i < nb; i++) if (rectsOverlap(builtCol[i], tile)) return (Thing){ TH_FARMBUILDING, .j = bs[i] };
     }
     for (int i = 0; i < world->nents; i++) {
         Ent *e = &world->ents[i];
@@ -1508,7 +1511,7 @@ static void draw(void) {
     if (eq(world->id, "farm")) {
         JFOR(t, jget(state, "soil")) if (str(t, "crop")) { int x, y; sscanf(t->string, "%d,%d", &x, &y); ADD((y + 1) * 16 - 2, D_CROP, t); }
         J *bs[8]; int nb = builtBuildings(bs);
-        for (int i = 0; i < nb; i++) ADD((num(bs[i], "y") + num(bs[i], "h")) * 16, D_BUILT, bs[i]);
+        for (int i = 0; i < nb; i++) ADD(builtCol[i].y + builtCol[i].h, D_BUILT, bs[i]);
         JFOR(a, jget(state, "animals")) if (cJSON_IsNumber(jget(a, "px"))) ADD(num(a, "py"), D_ANIMAL, a);
         JFOR(m, jget(state, "machines")) if (!isFlat(m)) ADD(machineY(state, m), D_MACHINE, m);
     }
