@@ -3,6 +3,7 @@
 // Decorating taps the tile in front of the player (A) instead of a tile under the finger.
 #include <stdio.h>
 #include "game.h"
+#include "audio.h"
 
 // ponytail: the web picks k = round(screen short side / 176) = 1 here; the 3DS screen is small, so 2x (integer
 // like the web: no shimmer). The world view is 200x120.
@@ -1740,6 +1741,7 @@ void game_boot(void) {
     setnum(state, "energy", fmin(num(state, "energy"), maxEnergy(state)));
     refreshTools();
     hud_boot();
+    if (audio_problem()) toast("%s", audio_problem());
 }
 
 void game_quit(void) { persist(); }

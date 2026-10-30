@@ -27,6 +27,8 @@ static float sine[TBL];
 static int64_t clk;              // render clock (samples)
 static uint32_t arng = 0x9e3779b9;
 static volatile bool ok;         // a backend is running
+static char problem[160];        // why audio is off (3DS), for the boot toast
+const char *audio_problem(void) { return problem[0] ? problem : NULL; }
 typedef struct { uint8_t op, a, b; float x; } Cmd;
 static Cmd q[QN];
 static volatile unsigned qh, qt;
@@ -203,7 +205,14 @@ static void mixer(void *arg) {
 
 void audio_init(void) {
     tables();
-    if (R_FAILED(ndspInit())) { plog("audio: ndspInit failed (no sdmc:/3ds/dspfirm.cdc?), running silent"); return; }
+    Result r = ndspInit();
+    if (R_FAILED(r)) {
+        bool fw = access("sdmc:/3ds/dspfirm.cdc", F_OK) != 0;
+        snprintf(problem, sizeof problem, fw ? "No sound: sdmc:/3ds/dspfirm.cdc is missing. Run the DSP1 homebrew once to create it."
+                                             : "No sound: the audio service failed (error %08lX).", (unsigned long)r);
+        plog("audio: ndspInit failed %08lX (dspfirm.cdc %s), running silent", (unsigned long)r, fw ? "missing" : "present");
+        return;
+    }
     ndspSetOutputMode(NDSP_OUTPUT_STEREO);
     ndspChnReset(0);
     ndspChnSetInterp(0, NDSP_INTERP_LINEAR);
@@ -226,7 +235,7 @@ void audio_init(void) {
     th = threadCreate(mixer, NULL, 32 * 1024, prio, core = 2, false);
     if (!th) { APT_SetAppCpuTimeLimit(30); th = threadCreate(mixer, NULL, 32 * 1024, prio, core = 1, false); }
     if (!th) th = threadCreate(mixer, NULL, 32 * 1024, prio, core = 0, false);
-    if (!th) { plog("audio: no mixer thread, running silent"); run = false; ndspExit(); linearFree(pcm); return; }
+    if (!th) { snprintf(problem, sizeof problem, "No sound: couldn't start the audio thread."); plog("audio: no mixer thread, running silent"); run = false; ndspExit(); linearFree(pcm); return; }
     ok = true;
     plog("audio: ndsp ok, mixer on core %d", core);
 }

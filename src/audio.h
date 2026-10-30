@@ -28,6 +28,7 @@ void music_tick(double t1);                                // music.c: schedule 
 bool a_cmd(int op, int a, int b, float x);                 // queue a command (false if audio is off / queue full)
 void audio_init(void);                                     // 3DS: ndspInit + mixer thread (silent if it fails)
 void audio_exit(void);
+const char *audio_problem(void);                           // why there's no sound (shown once at boot), or NULL
 void audio_pump(void);                                     // PC only (PF_WAV=1): render up to nowMs() into build/audio.wav
 
 // sfx with the web's opts: crank {dur}, roll {dur}, bounce {vol} → x; tada {rarity} → "common"/"rare"/"legendary"
