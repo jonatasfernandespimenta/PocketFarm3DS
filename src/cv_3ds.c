@@ -1,6 +1,8 @@
 // 3DS screens through citro2d. Images upload lazily as power-of-two chunks (an image dimension splits like
 // its binary representation: 576 = 512 + 64), so big sheets need no padding; fully transparent chunks are
-// skipped.
+// skipped. Textures live until linear memory runs out; then the ones not drawn this frame are dropped (they
+// upload again when drawn). A texture freed while this frame's queued draws may still use it is deleted at the
+// next frame start, after the GPU is done with it (C3D_FRAME_SYNCDRAW).
 #include <3ds.h>
 #include <citro2d.h>
 #include <math.h>
@@ -11,7 +13,25 @@
 typedef struct { C3D_Tex tex; int x, y, w, h; bool empty; } Chunk;
 unsigned long texBytes;   // GPU texture memory in use (debug log)
 void plog(const char *fmt, ...);
-typedef struct { int n; Chunk c[]; } Chunks;
+typedef struct Chunks { Img *owner; int used; struct Chunks *prev, *next; int n; Chunk c[]; } Chunks;
+static Chunks *live, *grave;   // uploaded images (linked), textures waiting for the GPU to finish the frame
+static int frameNo;
+
+static void unlink(Chunks *cs) {
+    if (cs->prev) cs->prev->next = cs->next; else live = cs->next;
+    if (cs->next) cs->next->prev = cs->prev;
+    cs->prev = cs->next = NULL;
+}
+static void destroy(Chunks *cs) {
+    for (int i = 0; i < cs->n; i++) if (!cs->c[i].empty) { C3D_TexDelete(&cs->c[i].tex); texBytes -= cs->c[i].w * cs->c[i].h * 4; }
+    free(cs);
+}
+// Drop every texture not drawn this frame; returns whether anything was freed.
+static bool evict(void) {
+    bool any = false;
+    for (Chunks *cs = live, *nx; cs; cs = nx) { nx = cs->next; if (cs->used < frameNo) { cs->owner->gpu = NULL; unlink(cs); destroy(cs); any = true; } }
+    return any;
+}
 
 static int split(int n, int *out) {   // n → power-of-two pieces (≤ 1024, ≥ 8)
     int k = 0;
@@ -46,7 +66,9 @@ static void upload(Img *im) {
             for (int y = 0; y < vh && !any; y++) for (int x = 0; x < vw; x++) if (im->px[((y0 + y) * im->w + x0 + x) * 4 + 3]) { any = true; break; }
             c->empty = !any;
             if (c->empty) { x0 += xs[i]; continue; }
-            if (!C3D_TexInit(&c->tex, c->w, c->h, GPU_RGBA8)) {   // out of linear memory: draw nothing rather than garbage
+            bool ok = C3D_TexInit(&c->tex, c->w, c->h, GPU_RGBA8);
+            if (!ok && evict()) ok = C3D_TexInit(&c->tex, c->w, c->h, GPU_RGBA8);
+            if (!ok) {   // still out of linear memory: draw nothing rather than garbage
                 static int warned;
                 if (warned++ < 8) plog("tex alloc failed %dx%d (image %dx%d), linear free %lu KB, textures %lu KB", c->w, c->h, im->w, im->h, (unsigned long)linearSpaceFree() / 1024, texBytes / 1024);
                 c->empty = true; x0 += xs[i]; continue;
@@ -59,6 +81,8 @@ static void upload(Img *im) {
         }
         y0 += ys[j];
     }
+    cs->owner = im; cs->used = frameNo;
+    cs->next = live; if (live) live->prev = cs; live = cs;
     im->gpu = cs;
     im->dirty = false;
 }
@@ -83,9 +107,10 @@ static void swizzle(Img *im, Chunk *c) {
 void gpu_free(Img *im) {
     Chunks *cs = im->gpu;
     if (!cs) return;
-    for (int i = 0; i < cs->n; i++) if (!cs->c[i].empty) { C3D_TexDelete(&cs->c[i].tex); texBytes -= cs->c[i].w * cs->c[i].h * 4; }
-    free(cs);
+    unlink(cs);
     im->gpu = NULL;
+    if (cs->used < frameNo) destroy(cs);
+    else { cs->next = grave; grave = cs; }   // drawn this frame: the queued draw still reads it
 }
 
 // ---------- blending ----------
@@ -113,6 +138,8 @@ static C3D_RenderTarget *screenTarget(int which) {
 // quad, and on hardware VRAM starts with the launcher's leftovers (Azahar zeroes it), so an uncleared depth buffer
 // randomly rejects parts of the frame.
 void gpu_beginFrame(void) {
+    frameNo++;
+    while (grave) { Chunks *nx = grave->next; destroy(grave); grave = nx; }
     for (int i = 0; i < 2; i++) C2D_TargetClear(screenTarget(i), C2D_Color32(0, 0, 0, 255));
 }
 void gpu_target(Img *screen) {
@@ -148,6 +175,7 @@ static void unflip(C2D_DrawParams *p, Tex3DS_SubTexture *sub) {
 
 void gpu_image(Img *im, float sx, float sy, float sw, float sh, float dx, float dy, float dw, float dh, const float m[6], float alpha, int op, uint32_t tc) {
     if (im->dirty || !im->gpu) upload(im);
+    ((Chunks *)im->gpu)->used = frameNo;
     float kx = dw / sw, ky = dh / sh;
     float x0 = fmaxf(sx, 0), y0 = fmaxf(sy, 0), x1 = fminf(sx + sw, im->w), y1 = fminf(sy + sh, im->h);
     if (x1 <= x0 || y1 <= y0) return;
@@ -174,6 +202,7 @@ void gpu_fill(float x, float y, float w, float h, const float m[6], float alpha,
     set_op(op);
     if (pat) {   // repeat: one quad whose UVs run past 1 (pattern images are a single power-of-two chunk)
         if (pat->dirty || !pat->gpu) upload(pat);
+        ((Chunks *)pat->gpu)->used = frameNo;
         Chunk *c = &((Chunks *)pat->gpu)->c[0];
         if (c->empty) return;
         Tex3DS_SubTexture sub = { (u16)w, (u16)h, x / c->w, 1 - y / c->h, (x + w) / c->w, 1 - (y + h) / c->h };

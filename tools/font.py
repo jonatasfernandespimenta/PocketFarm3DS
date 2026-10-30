@@ -15,7 +15,9 @@ for name, (file, size, weight, aa) in FONTS.items():
     if weight: f.set_variation_by_axes([weight])
     asc, desc = f.getmetrics()
     atlas = Image.new('LA', (256, 256), (255, 0)); x = y = 0; rowh = 0; glyphs = {}
+    tofu = bytes(f.getmask('\ue000'))   # what the font draws for a character it doesn't have
     for ch in CHARS:
+        if ord(ch) > 255 and bytes(f.getmask(ch)) == tofu: continue   # missing: the game falls back to ASCII
         bb = f.getbbox(ch)
         adv = round(f.getlength(ch))
         if bb[2] <= bb[0]: glyphs[ord(ch)] = [0, 0, 0, 0, 0, 0, adv]; continue
