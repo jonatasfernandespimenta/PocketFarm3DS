@@ -1,0 +1,7 @@
+-I/opt/devkitpro/libctru/include
+-I/opt/devkitpro/libctru/include
+-Ivendor
+-Ivendor/cjson
+-Isrc
+-D__3DS__
+-D_GNU_SOURCE
