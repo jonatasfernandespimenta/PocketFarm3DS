@@ -1132,8 +1132,11 @@ static void updateFishing(double dt) {
         give(state, f->result.id, 1);
         J *st = jget(state, "stats"); setnum(st, "fished", num(st, "fished") + 1);
         const char *name = itemName(f->result.id);
+        // the river bed brings up clay now and then (the other source is the mine's stones)
+        bool clay = eq(world->id, "forest") && frand() < 0.3;
+        if (clay) give(state, "clay", 1);
         floatText(player.x, player.y - 30, "%s!", name);
-        toast("You caught %s!%s", name, eq(f->result.rarity, "legendary") ? " LEGENDARY!" : "");
+        toast("You caught %s!%s%s", name, eq(f->result.rarity, "legendary") ? " LEGENDARY!" : "", clay ? " And 1 Clay came up on the hook." : "");
         sfx("catch"); endFishing(); changed();
     }
 }

@@ -44,8 +44,9 @@ static struct {
     int pzIndex;                    // PUZZLES index, -1 = daily
     bool running, fast;
     int steps, tool, cx, cy;
+    int held;                       // layout index picked up by Move, -1 = none
     double acc, doneT;
-    const char *tools[8]; int ntools; // allow keys + "erase"
+    const char *tools[9]; int ntools; // allow keys + "move" + "erase"
 } B;
 static J *bpLast;   // the blueprint handed to shops_blueprintMenu (valid until the next one)
 
@@ -53,7 +54,7 @@ static void bench(int index, J *rival);
 static void solved(void);
 static void solvedDaily(void);
 
-static void reset(void) { B.running = false; B.steps = 0; cJSON_Delete(B.s); B.s = ws_build(B.pz, B.layout); }
+static void reset(void) { B.running = false; B.steps = 0; B.held = -1; cJSON_Delete(B.s); B.s = ws_build(B.pz, B.layout); }
 
 void workshopMenu(void);
 static bool rowDaily(void *a) { (void)a; playDaily(NULL); return false; }
@@ -137,9 +138,25 @@ static void act(int x, int y) {
     J *hit = machineAt(B.s, x, y);
     const char *tool = B.tools[B.tool];
     if (hit && has(hit, "fixed")) { toast("That's Mike's piece: it stays put."); return; }
-    if (hit) {
-        int i = 0;
-        JFOR(m, jget(B.s, "machines")) { if (m == hit) break; i += !has(m, "fixed"); }
+    int i = 0;
+    if (hit) JFOR(m, jget(B.s, "machines")) { if (m == hit) break; i += !has(m, "fixed"); }
+    if (eq(tool, "move")) {
+        // pick a piece up, then drop it on an empty spot (direction kept); its own tile again lets go
+        if (B.held < 0 || (hit && i != B.held)) {
+            if (!hit) { toast("Tap a piece to pick it up."); return; }
+            B.held = i; sfx("click"); return;
+        }
+        J *p = jat(B.layout, B.held);
+        if (numv(jat(p, 1)) == x && numv(jat(p, 2)) == y) { B.held = -1; return; }
+        J *rest = cJSON_Duplicate(B.layout, true);
+        cJSON_DeleteItemFromArray(rest, B.held);
+        J *rs = ws_build(B.pz, rest);
+        bool ok = ws_canPut(B.pz, rs, rest, jat(p, 0)->valuestring, x, y);
+        cJSON_Delete(rs); cJSON_Delete(rest);
+        if (!ok) { toast("Doesn't fit there."); return; }
+        cJSON_ReplaceItemInArray(p, 1, cJSON_CreateNumber(x));
+        cJSON_ReplaceItemInArray(p, 2, cJSON_CreateNumber(y));
+    } else if (hit) {
         J *p = jat(B.layout, i);
         if (eq(tool, "erase")) cJSON_DeleteItemFromArray(B.layout, i);
         else cJSON_ReplaceItemInArray(p, 3, cJSON_CreateString(DIR_NAME[ROTATE[dirFrom(jat(p, 3)->valuestring)]]));
@@ -182,8 +199,8 @@ static bool benchFrame(double dt) {
     if (in.down & BTN_UP) B.cy = B.cy > 0 ? B.cy - 1 : 0;
     if (in.down & BTN_DOWN) B.cy = B.cy < h - 1 ? B.cy + 1 : h - 1;
     if (in.down & BTN_A) act(B.cx, B.cy);
-    if (in.down & BTN_L) { B.tool = (B.tool + B.ntools - 1) % B.ntools; sfx("click"); }
-    if (in.down & BTN_R) { B.tool = (B.tool + 1) % B.ntools; sfx("click"); }
+    if (in.down & BTN_L) { B.tool = (B.tool + B.ntools - 1) % B.ntools; B.held = -1; sfx("click"); }
+    if (in.down & BTN_R) { B.tool = (B.tool + 1) % B.ntools; B.held = -1; sfx("click"); }
     if (in.down & BTN_X) { sfx("click"); runToggle(); }
     if (in.down & BTN_Y) { sfx("click"); B.fast = !B.fast; }
 
@@ -214,6 +231,13 @@ static bool benchFrame(double dt) {
         int x = gx + B.cx * cs, y = gy + (B.cy + 1) * cs;
         uint32_t c = 0xfee761ff;
         cv_fill(x, y, cs, 2, c); cv_fill(x, y + cs - 2, cs, 2, c); cv_fill(x, y, 2, cs, c); cv_fill(x + cs - 2, y, 2, cs, c);
+    }
+    if (B.held >= 0) {   // the piece picked up by Move: a steady outline
+        J *p = jat(B.layout, B.held);
+        int n = num(jget(table("MACHINES"), jat(p, 0)->valuestring), "size");
+        int x = gx + numv(jat(p, 1)) * cs, y = gy + (numv(jat(p, 2)) + 1) * cs, z = n * cs;
+        uint32_t c = 0xffffffff;
+        cv_fill(x, y, z, 2, c); cv_fill(x, y + z - 2, z, 2, c); cv_fill(x, y, 2, z, c); cv_fill(x + z - 2, y, 2, z, c);
     }
     if (tapped(gx, gy + cs, w * cs, h * cs)) {
         B.cx = (in.tx - gx) / cs; B.cy = (in.ty - gy) / cs - 1;
@@ -247,15 +271,18 @@ static bool benchFrame(double dt) {
         else nine("assets/ui/paper-small.png", x, y, 30, 30, 4, 4, 4, 4);
         char ic[48];
         if (eq(tl, "erase")) drawIcon("trash", x + 7, y + 7, 1);
+        else if (eq(tl, "move")) drawIcon("hand", x + 7, y + 7, 1);
         else {
             snprintf(ic, sizeof ic, "item:machine_%s", tl);
             drawIcon(ic, x + 7, y + 5, 1);
             char c[8]; snprintf(c, sizeof c, "%d", (int)num(jget(B.pz, "allow"), tl) - ws_used(B.layout, tl));
             text_draw("small", c, x + 28 - text_width("small", c), y + 19, INK, 0);
         }
-        if (tapped(x, y, 30, 30)) { B.tool = i; sfx("click"); }
+        if (tapped(x, y, 30, 30)) { B.tool = i; B.held = -1; sfx("click"); }
     }
-    text_draw("small", "L/R piece · A place/rotate", 8 + B.ntools * 34 + 4, 186, 0xb9a58aff, SW - (8 + B.ntools * 34 + 12));
+    char hl[96] = "L/R piece · A place/rotate/move";
+    if (B.held >= 0) snprintf(hl, sizeof hl, "Moving %s: A where to drop it", str(jget(table("MACHINES"), jat(jat(B.layout, B.held), 0)->valuestring), "name"));
+    text_draw("small", hl, 8 + B.ntools * 34 + 4, 186, B.held >= 0 ? CREAM : 0xb9a58aff, SW - (8 + B.ntools * 34 + 12));
 
     // controls
     int y = 214;
@@ -279,6 +306,7 @@ static void bench(int index, J *rival) {
     B.fast = false; B.acc = 0; B.doneT = 0; B.tool = 0; B.cx = B.cy = 0;
     B.ntools = 0;
     JFOR(a, jget(B.pz, "allow")) if (B.ntools < 7) B.tools[B.ntools++] = a->string;
+    B.tools[B.ntools++] = "move";
     B.tools[B.ntools++] = "erase";
     reset();
     hud_closeMenu();
