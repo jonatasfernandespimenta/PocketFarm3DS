@@ -13,5 +13,6 @@
 		1019425
 	],
 	"icon": "https://raw.githubusercontent.com/jonatasfernandespimenta/PocketFarm3DS/main/meta/icon.png",
-	"image": "https://raw.githubusercontent.com/jonatasfernandespimenta/PocketFarm3DS/main/meta/banner.png"
+	"image": "https://raw.githubusercontent.com/jonatasfernandespimenta/PocketFarm3DS/main/meta/banner.png",
+	"llm_generation": "yes"
 }
