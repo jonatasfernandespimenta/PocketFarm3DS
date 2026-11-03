@@ -642,12 +642,14 @@ static void drawHud(void) {
     // objective chip + quest tracker
     int y = 74;
     if (objOn) {
+        // long objectives wrap onto more lines (the web chip wraps too) instead of running off the screen
         int w = fmin(SW - 8 - (house ? 120 : 0), text_width("px", objLabel) + 40);
-        if (objTap) nine("assets/ui/btn-gold.png", 4, y, w, 28, 5, 5, 5, 8); else FRAME(4, y, w, 28);
+        int h = fmax(28, text_height("px", objLabel, w - 38) + 12);
+        if (objTap) nine("assets/ui/btn-gold.png", 4, y, w, h, 5, 5, 5, 8); else FRAME(4, y, w, h);
         if (objIcon[0]) drawIcon(objIcon, 9, y + 5, 1);
-        text_draw("px", objLabel, 30, y + 5, INK, 0);
-        if (objTap && tapped(4, y, w, 28)) { sfx("click"); tutorial_tapObjective(); return; }
-        y += 32;
+        text_draw("px", objLabel, 30, y + 5, INK, w - 38);
+        if (objTap && tapped(4, y, w, h)) { sfx("click"); tutorial_tapObjective(); return; }
+        y += h + 4;
     }
     for (int i = 0; i < nqt + (qtMore ? 1 : 0); i++) {
         if (i == nqt) snprintf(b, sizeof b, "+%d more", qtMore);
