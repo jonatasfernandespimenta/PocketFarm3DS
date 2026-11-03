@@ -32,7 +32,9 @@ static const int SIDES[4][2] = { [UP] = { LEFT, RIGHT }, [DOWN] = { RIGHT, LEFT 
 static const int BACK[4] = { [UP] = DOWN, [DOWN] = UP, [LEFT] = RIGHT, [RIGHT] = LEFT };
 const int ROTATE[4] = { [UP] = RIGHT, [RIGHT] = DOWN, [DOWN] = LEFT, [LEFT] = UP };
 
-J *mdef(J *m) { return jget(table("MACHINES"), str(m, "type")); }
+// DATA is parsed once at boot: look the MACHINES table up once, not on every call (68 string compares each time).
+static J *MT(void) { static J *t; if (!t) t = table("MACHINES"); return t; }
+J *mdef(J *m) { return jget(MT(), str(m, "type")); }
 static int size(J *m) { return num(mdef(m), "size"); }
 static int mdir(J *m) { return dirFrom(str(m, "dir")); }
 
@@ -44,7 +46,7 @@ int factoryTier(J *s) {
 
 // Footprint: `size` tiles wide and `rows` tall (rows defaults to size; low pieces like counters are 1 row).
 int rows(const char *type) {
-    J *d = jget(table("MACHINES"), type), *r = jget(d, "rows");
+    J *d = jget(MT(), type), *r = jget(d, "rows");
     return cJSON_IsNumber(r) ? r->valuedouble : num(d, "size");
 }
 static int rowsOf(J *m) { return rows(str(m, "type")); }
@@ -53,8 +55,12 @@ int cells(J *m, Tile *out, int max) {
     for (int dy = 0; dy < h; dy++) for (int dx = 0; dx < n; dx++) if (k < max) out[k++] = (Tile){ (int)num(m, "x") + dx, (int)num(m, "y") + dy };
     return k;
 }
+// ponytail: MAX_FOOT = the biggest size/rows in MACHINES (4); raise it if a bigger machine is added
+#define MAX_FOOT 4
 bool machineCovers(J *m, int x, int y) {
-    int n = size(m), h = rowsOf(m), mx = num(m, "x"), my = num(m, "y");
+    int mx = num(m, "x"), my = num(m, "y");
+    if (x < mx || y < my || x >= mx + MAX_FOOT || y >= my + MAX_FOOT) return false;   // most pieces: no table lookups
+    int n = size(m), h = rowsOf(m);
     return x >= mx && x < mx + n && y >= my && y < my + h;
 }
 J *machineAt(J *s, int x, int y) { JFOR(m, jget(s, "machines")) if (machineCovers(m, x, y)) return m; return NULL; }

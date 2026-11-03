@@ -1609,13 +1609,32 @@ static bool feedsTile(J *n, int x, int y) {
     if (jget(def, "recipes") || jget(def, "produce") || has(def, "dock") || eq(t, "collector")) { Tile oc = outputCell(n); return oc.x == x && oc.y == y; }
     return false;
 }
+// Tile -> machine for the farm draw: belts and arms look at their neighbours every frame, and machineAt walks
+// every machine. Built at the start of the farm draw, valid only until its y-sorted list is built (scene.c and
+// game_drawFlatPiece draw other factories through the same functions, and fall back to machineAt).
+// ponytail: G covers the 40x30 farm; tiles outside it fall back to machineAt too.
+enum { DG = 64 };
+static J *dgrid[DG][DG];
+static bool dgridOn;
+static void buildDrawGrid(void) {
+    memset(dgrid, 0, sizeof dgrid);
+    JFOR(m, jget(state, "machines")) {
+        Tile c[16]; int n = cells(m, c, 16);
+        for (int i = 0; i < n; i++) if ((unsigned)c[i].x < DG && (unsigned)c[i].y < DG && !dgrid[c[i].y][c[i].x]) dgrid[c[i].y][c[i].x] = m;   // first wins, like machineAt
+    }
+    dgridOn = true;
+}
+static J *drawMachineAt(J *st, int x, int y) {
+    if (dgridOn && st == state && (unsigned)x < DG && (unsigned)y < DG) return dgrid[y][x];
+    return machineAt(st, x, y);
+}
 static int beltInSide(J *m) {
     int x = num(m, "x"), y = num(m, "y"), d = dirFrom(str(m, "dir")), b = BACK_DIR[d];
-    J *back = machineAt(state, x + DV[b][0], y + DV[b][1]);
+    J *back = drawMachineAt(state, x + DV[b][0], y + DV[b][1]);
     if (back != m && feedsTile(back, x, y)) return -1;
     for (int s = 0; s < 4; s++) {
         if (s == d || s == b) continue;
-        J *n = machineAt(state, x + DV[s][0], y + DV[s][1]);
+        J *n = drawMachineAt(state, x + DV[s][0], y + DV[s][1]);
         if (n != m && feedsTile(n, x, y)) return s;   // cargo comes from side s
     }
     return -1;
@@ -1670,8 +1689,8 @@ static double machineY(J *st, J *m) {
     double y = mbottom(m);
     if (eq(str(m, "type"), "arm")) {
         int dir = dirFrom(str(m, "dir")), ds[2] = { dir, BACK_DIR[dir] };
-        for (int i = 0; i < 2; i++) { J *n = machineAt(st, num(m, "x") + DV[ds[i]][0], num(m, "y") + DV[ds[i]][1]); if (n && !isFlat(n) && !has(mdef(n), "store")) y = fmax(y, mbottom(n)) + 0.5; }
-        for (int k = 0; k < 4; k++) { J *n = machineAt(st, num(m, "x") + DV[k][0], num(m, "y") + DV[k][1]); if (n && has(mdef(n), "store")) y = fmin(y, mbottom(n) - 0.5); }
+        for (int i = 0; i < 2; i++) { J *n = drawMachineAt(st, num(m, "x") + DV[ds[i]][0], num(m, "y") + DV[ds[i]][1]); if (n && !isFlat(n) && !has(mdef(n), "store")) y = fmax(y, mbottom(n)) + 0.5; }
+        for (int k = 0; k < 4; k++) { J *n = drawMachineAt(st, num(m, "x") + DV[k][0], num(m, "y") + DV[k][1]); if (n && has(mdef(n), "store")) y = fmin(y, mbottom(n) - 0.5); }
     }
     return y;
 }
@@ -1895,6 +1914,7 @@ static void draw(void) {
     for (int i = 0; i < map->nprops; i++) if (map->props[i].flat) drawProp(&map->props[i], gtime);
     J *flatList[256]; int nflat = 0;
     if (eq(world->id, "farm")) {
+        buildDrawGrid();
         drawSoil(state, SOILDRY, SOILWET);
         JFOR(m, jget(state, "machines")) if (isFlat(m)) { drawFlatPiece(m); if (nflat < 256) flatList[nflat++] = m; }
         drawBeltItems(flatList, nflat);
@@ -1922,6 +1942,7 @@ static void draw(void) {
     JFOR(a, jget(state, "animals")) if (cJSON_IsNumber(jget(a, "px"))) ADD(num(a, "py"), D_ANIMAL, a);   // any map: pens and interiors
     ADD(player.y, D_PLAYER, NULL);
     if (mascotOf(state)) ADD(mascot.y, D_MASCOT, NULL);
+    dgridOn = false;
     qsort(list, n, sizeof(Draw), cmpDraw);
     Img *crops = I("assets/Cute_Fantasy/Crops/Crops.png");
     for (int i = 0; i < n; i++) {

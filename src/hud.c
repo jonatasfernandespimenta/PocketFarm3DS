@@ -174,15 +174,35 @@ int text_width(const char *f, const char *s) { return layout(f, s, 0, 0, 0, 0, f
 int text_draw(const char *f, const char *s, int x, int y, uint32_t color, int maxw) { layout(f, s, x, y, color, maxw, true); return layout(f, s, 0, 0, 0, maxw ? maxw : 100000, false); }
 static int text_height(const char *f, const char *s, int maxw) { return layout(f, s, 0, 0, 0, maxw, false); }
 // px text with a 1px ink outline and a 2px drop (the floaters / slot counts)
+// Baked once per (font, text, color) into a small image: 9 passes of glyph quads a frame cost ~3 ms in the hotbar.
 static void text_outlined(const char *f, const char *s, int x, int y, uint32_t color) {
     static const int O[][2] = { { 0, 2 }, { 1, 0 }, { -1, 0 }, { 0, -1 }, { 1, 2 }, { -1, 2 }, { 1, 1 }, { -1, 1 } };
-    for (int i = 0; i < 8; i++) layout(f, s, x + O[i][0], y + O[i][1], INK, 0, true);
-    layout(f, s, x, y, color, 0, true);
+    // ponytail: 64 slots, round-robin eviction; texts longer than 23 bytes draw directly
+    static struct { char f[8], s[24]; uint32_t color; Img *im; } cache[64];
+    static int next;
+    if (strlen(s) >= sizeof cache[0].s || strlen(f) >= sizeof cache[0].f) {
+        for (int i = 0; i < 8; i++) layout(f, s, x + O[i][0], y + O[i][1], INK, 0, true);
+        layout(f, s, x, y, color, 0, true);
+        return;
+    }
+    int k = 0;
+    while (k < 64 && !(cache[k].im && !strcmp(cache[k].f, f) && cache[k].color == color && !strcmp(cache[k].s, s))) k++;
+    if (k == 64) {
+        k = next; next = (next + 1) % 64;
+        img_free(cache[k].im);
+        Img *im = img_new(text_width(f, s) + 2, text_lineh(f) + 3);   // outline reaches 1px left/right/up, 2px down
+        cv_push_target(im);
+        for (int i = 0; i < 8; i++) layout(f, s, 1 + O[i][0], 1 + O[i][1], INK, 0, true);
+        layout(f, s, 1, 1, color, 0, true);
+        cv_pop_target();
+        strcpy(cache[k].f, f); strcpy(cache[k].s, s); cache[k].color = color; cache[k].im = im;
+    }
+    cv_draw(cache[k].im, x - 1, y - 1);
 }
 static void center(const char *f, const char *s, int cx, int y, uint32_t c) { text_draw(f, s, cx - text_width(f, s) / 2, y, c, 0); }
 
 // ---------- 9-slice frames ----------
-static void nine(const char *src, int x, int y, int w, int h, int l, int t, int r, int b) {
+static void nine_draw(const char *src, int x, int y, int w, int h, int l, int t, int r, int b) {
     Img *im = I(src);
     int iw = im->w, ih = im->h, mw = iw - l - r, mh = ih - t - b;
     cv_image(im, 0, 0, l, t, x, y, l, t);
@@ -194,6 +214,25 @@ static void nine(const char *src, int x, int y, int w, int h, int l, int t, int 
     cv_image(im, 0, ih - b, l, b, x, y + h - b, l, b);
     cv_image(im, l, ih - b, mw, b, x + l, y + h - b, w - l - r, b);
     cv_image(im, iw - r, ih - b, r, b, x + w - r, y + h - b, r, b);
+}
+// Small frames (hotbar slots, buttons) are baked once per (image, size, borders): 9 quads each a frame added up.
+// ponytail: only up to 64x64 (a baked menu panel would cost hundreds of KB); 64 slots, round-robin eviction
+static void nine(const char *src, int x, int y, int w, int h, int l, int t, int r, int b) {
+    static struct { char src[48]; int w, h, l, t, r, b; Img *im; } cache[64];
+    static int next;
+    if (w <= 0 || h <= 0 || w > 64 || h > 64 || strlen(src) >= sizeof cache[0].src) { nine_draw(src, x, y, w, h, l, t, r, b); return; }
+    int k = 0;
+    while (k < 64 && !(cache[k].im && cache[k].w == w && cache[k].h == h && cache[k].l == l && cache[k].t == t && cache[k].r == r && cache[k].b == b && !strcmp(cache[k].src, src))) k++;
+    if (k == 64) {
+        k = next; next = (next + 1) % 64;
+        img_free(cache[k].im);
+        Img *im = img_new(w, h);
+        cv_push_target(im);
+        nine_draw(src, 0, 0, w, h, l, t, r, b);
+        cv_pop_target();
+        strcpy(cache[k].src, src); cache[k].w = w; cache[k].h = h; cache[k].l = l; cache[k].t = t; cache[k].r = r; cache[k].b = b; cache[k].im = im;
+    }
+    cv_draw(cache[k].im, x, y);
 }
 #define FRAME(x, y, w, h) nine("assets/ui/btn.png", x, y, w, h, 5, 5, 5, 8)
 #define PAPER(x, y, w, h) nine("assets/ui/paper-small.png", x, y, w, h, 4, 4, 4, 4)
@@ -598,9 +637,17 @@ static void drawMenu(double dt) {
 void shops_questLog(void);
 void tutorial_tapObjective(void);
 static void drawHud(void) {
-    cv_fill(0, 0, SW, SH, BG);
-    // tiled grass-ish backdrop so the screen isn't flat
-    for (int y = 0; y < SH; y += 8) for (int x = (y / 8) % 2 * 8; x < SW; x += 16) cv_fill(x, y, 8, 8, 0x1d4446ff);
+    // tiled grass-ish backdrop so the screen isn't flat: baked once (as 600 fills it cost ~3 ms a frame on 3DS)
+    static Img *bg;
+    if (!bg) {
+        bg = img_new(SW, SH);
+        for (int y = 0; y < SH; y++) for (int x = 0; x < SW; x++) {
+            uint32_t c = (x / 8 + y / 8) % 2 == 0 ? 0x1d4446ff : BG;
+            uint8_t *p = bg->px + (y * SW + x) * 4;
+            p[0] = c >> 24; p[1] = c >> 16; p[2] = c >> 8; p[3] = c;
+        }
+    }
+    cv_draw(bg, 0, 0);
     // hud-box: day · time, money, tickets, energy
     char b[96], m[32];
     int si = seasonIndex(state);

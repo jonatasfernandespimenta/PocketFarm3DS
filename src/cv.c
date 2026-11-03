@@ -12,7 +12,7 @@
 typedef uint8_t u8;
 
 // ---------- images ----------
-typedef struct { char *path; Img *im; } Cached;
+typedef struct { char *path; uint32_t hash; Img *im; } Cached;
 static Cached *cache; static int ncache;
 
 Img *img_new(int w, int h) {
@@ -39,15 +39,19 @@ Img *img_decode(const char *path) {   // uncached: the caller owns it
     im->w = w; im->h = h; im->px = px; im->dirty = true;
     return im;
 }
+// Every draw looks its image up by path, and the paths share long prefixes (romfs:/assets/Cute_Fantasy/…):
+// compare an FNV-1a hash first, strcmp only on a hash match.
 Img *img_load_ex(const char *path, bool *fresh) {
-    for (int i = 0; i < ncache; i++) if (!strcmp(cache[i].path, path)) return cache[i].im;
+    uint32_t hash = 2166136261u;
+    for (const char *c = path; *c; c++) hash = (hash ^ (u8)*c) * 16777619u;
+    for (int i = 0; i < ncache; i++) if (cache[i].hash == hash && !strcmp(cache[i].path, path)) return cache[i].im;
     if (fresh) *fresh = true;
     int w, h, ch;
     u8 *px = stbi_load(plat_path(path), &w, &h, &ch, 4);
     Img *im = NULL;
     if (px) { im = calloc(1, sizeof *im); im->w = w; im->h = h; im->px = px; im->dirty = true; }
     cache = realloc(cache, (ncache + 1) * sizeof *cache);
-    cache[ncache++] = (Cached){ strdup(path), im };
+    cache[ncache++] = (Cached){ strdup(path), hash, im };
     return im;
 }
 
