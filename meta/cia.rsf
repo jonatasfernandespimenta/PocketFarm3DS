@@ -27,7 +27,7 @@ AccessControlInfo:
     - DirectSdmcWrite
   IoAccessControl:
   MemoryType                    : Application
-  # New 3DS only: the game wants the 124 MB mode (an app launched from the Homebrew Launcher gets its host's memory)
+  # 64 MB on an original 3DS (the game uses ~40 MB), 124 MB on a New 3DS
   SystemMode                    : 64MB
   SystemModeExt                 : 124MB
   CpuSpeed                      : 804MHz

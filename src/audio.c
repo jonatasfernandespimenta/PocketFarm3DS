@@ -236,7 +236,10 @@ void audio_init(void) {
     prio = prio > 0x19 ? prio - 1 : 0x18;
     run = true;
     // New 3DS core 2 (free), else core 1 (system core, 30% for apps), else share core 0 at a higher priority
-    th = threadCreate(mixer, NULL, 32 * 1024, prio, core = 2, false);
+    // Old 3DS has no core 2: don't even ask (Azahar crashes on it instead of returning an error)
+    bool n3ds = false;
+    APT_CheckNew3DS(&n3ds);
+    th = n3ds ? threadCreate(mixer, NULL, 32 * 1024, prio, core = 2, false) : NULL;
     if (!th) { APT_SetAppCpuTimeLimit(30); th = threadCreate(mixer, NULL, 32 * 1024, prio, core = 1, false); }
     if (!th) th = threadCreate(mixer, NULL, 32 * 1024, prio, core = 0, false);
     if (!th) { snprintf(problem, sizeof problem, "No sound: couldn't start the audio thread."); plog("audio: no mixer thread, running silent"); run = false; ndspExit(); linearFree(pcm); return; }

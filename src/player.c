@@ -25,11 +25,15 @@ static Img *body, *tools, *rod;
 
 // ponytail: the six layers are composited once into one sheet (same pixels as drawing them in order every
 // frame: source-over is associative), which saves 5 draws per frame and five 8 MB textures on the 3DS.
+// The layers are decoded uncached and freed right after: kept in I()'s cache they were 47 MB of dead heap.
 void loadPlayerSprites(void) {
+    char path[256];
     for (int i = 0; i < 6; i++) {
-        Img *l = I(LAYERS[i]);
+        snprintf(path, sizeof path, "romfs:/%s", LAYERS[i]);
+        Img *l = img_decode(path);
         if (!body) { body = img_new(l->w, l->h); cv_push_target(body); }
         cv_draw(l, 0, 0);
+        img_free(l);
     }
     cv_pop_target();
     tools = I(P "Tools/Iron/Iron_Tools.png");

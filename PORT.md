@@ -1,6 +1,6 @@
 # PocketFarm 3DS: native C port
 
-Target: New 3DS only. The web game (../PocketFarmWeb) is the spec. Everything should come out 1:1, except that the
+Target: New 3DS (an original 3DS also runs it: ~21 MB heap + ~16 MB textures on the endgame farm). The web game (../PocketFarmWeb) is the spec. Everything should come out 1:1, except that the
 3DS build is in English: `tools/en.json` translates data.json at dump time, and the C UI strings are English.
 
 ## Layout

@@ -46,7 +46,8 @@ festivals: Flower Festival, Lake Luau, Harvest Festival and Winter Fair.
 
 ## Requirements
 
-- A **New** Nintendo 3DS, New 3DS XL or New 2DS XL. The original 3DS/2DS doesn't have enough memory.
+- A Nintendo 3DS of any model. A New 3DS / New 3DS XL / New 2DS XL is recommended. The original 3DS/2DS
+  runs it too, but so far that has only been tested in the Azahar emulator, which doesn't emulate its slower CPU.
 - Custom firmware (Luma3DS) with the Homebrew Launcher or FBI. See [3ds.hacks.guide](https://3ds.hacks.guide).
 - For sound: a DSP dump at `sdmc:/3ds/dspfirm.cdc`. Run the **DSP1** homebrew once to create it. Without it
   the game runs silently and says so on screen.
@@ -113,7 +114,7 @@ line, Y changes the speed and B goes back.
 ## Troubleshooting
 
 - **No sound:** `sdmc:/3ds/dspfirm.cdc` is missing. Run DSP1 once.
-- **Won't start on an old 3DS:** the game needs a New 3DS.
+- **Slow on an original 3DS:** its CPU is about a third as fast as the New 3DS. The timing info below shows where the time goes.
 - **Timing info:** create an empty file `sdmc:/3ds/PocketFarm/debug`, and the game writes per-frame timings
   to `log.txt` in the same folder.
 
