@@ -188,6 +188,18 @@ J *giveGift(J *s, const char *name, const char *item) {
 bool hasDiscount(J *s, const char *shop) { return has(jget(s, "discounts"), shop); }
 
 // ---------- contracts ----------
+// Can the farm make this item yet? (CONTRACT_NEEDS: one animal or machine of every group)
+static bool canMake(J *s, const char *id) {
+    JFOR(group, jget(table("CONTRACT_NEEDS"), id)) {
+        bool ok = false;
+        JFOR(t, group) {
+            JFOR(a, jget(s, "animals")) { const char *k = str(a, "kind"); if (k && !strcmp(k, t->valuestring)) ok = true; }
+            JFOR(m, jget(s, "machines")) { const char *k = str(m, "type"); if (k && !strcmp(k, t->valuestring)) ok = true; }
+        }
+        if (!ok) return false;
+    }
+    return true;
+}
 J *contractOffers(J *s) {
     J *ct = child(s, "contracts");
     if (num(ct, "day") != num(s, "day")) {
@@ -203,7 +215,7 @@ J *contractOffers(J *s) {
             J *t = pool[pick];
             memmove(pool + pick, pool + pick + 1, (np - pick - 1) * sizeof(J *)); np--;
             const char *items[32]; int ni = 0;
-            JFOR(id, jget(t, "items")) if (available(s, id->valuestring) && ni < 32) items[ni++] = id->valuestring;
+            JFOR(id, jget(t, "items")) if (available(s, id->valuestring) && canMake(s, id->valuestring) && ni < 32) items[ni++] = id->valuestring;
             if (!ni) { i--; continue; }
             const char *item = items[(int)floor(rngNext(&r) * ni)];
             int qty = randInt(&r, numv(jat(jget(t, "qty"), 0)), numv(jat(jget(t, "qty"), 1)));
