@@ -166,11 +166,16 @@ static C2D_DrawParams params(float x, float y, float w, float h, const float *m)
 }
 
 // citro2d doesn't mirror on a negative size (it shifts the quad), so a flipped draw becomes a positive-size
-// quad starting at the far corner, with the texture coordinates swapped.
+// quad starting at the far corner, with the texture coordinates swapped. Only left/right can be swapped:
+// tex3ds reads top < bottom as a rotated subtexture (u and v trade places), which is what broke the water
+// reflections on hardware. So a vertical flip becomes a half turn plus a horizontal flip (same quad, same texels).
 static void unflip(C2D_DrawParams *p, Tex3DS_SubTexture *sub) {
-    float c = cosf(p->angle), s = sinf(p->angle), t;
-    if (p->pos.w < 0) { p->pos.x += p->pos.w * c; p->pos.y += p->pos.w * s; p->pos.w = -p->pos.w; t = sub->left; sub->left = sub->right; sub->right = t; }
-    if (p->pos.h < 0) { p->pos.x -= p->pos.h * s; p->pos.y += p->pos.h * c; p->pos.h = -p->pos.h; t = sub->top; sub->top = sub->bottom; sub->bottom = t; }
+    if (p->pos.h < 0) { p->angle += (float)M_PI; p->pos.w = -p->pos.w; p->pos.h = -p->pos.h; }
+    if (p->pos.w < 0) {
+        float c = cosf(p->angle), s = sinf(p->angle), t;
+        p->pos.x += p->pos.w * c; p->pos.y += p->pos.w * s; p->pos.w = -p->pos.w;
+        t = sub->left; sub->left = sub->right; sub->right = t;
+    }
 }
 
 void gpu_image(Img *im, float sx, float sy, float sw, float sh, float dx, float dy, float dw, float dh, const float m[6], float alpha, int op, uint32_t tc) {
