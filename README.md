@@ -55,6 +55,11 @@ festivals: Flower Festival, Lake Luau, Harvest Festival and Winter Fair.
 
 Download a file from the [latest release](../../releases/latest).
 
+**Scan and install (FBI).** Open **FBI → Remote Install → Scan QR Code** and point the camera at this
+code. It always installs the latest release.
+
+![QR code: latest PocketFarm.cia](https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=https%3A%2F%2Fgithub.com%2Fjonatasfernandespimenta%2FPocketFarm3DS%2Freleases%2Flatest%2Fdownload%2FPocketFarm.cia)
+
 **CIA (HOME menu icon).**
 
 1. Copy `PocketFarm.cia` to the SD card (for example `sdmc:/cias/`).
