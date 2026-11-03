@@ -139,8 +139,9 @@ static J *mold(int which) {
         cJSON_AddItemToArray(ref, P("arm", 1, 1, "right", NULL)); cJSON_AddItemToArray(ref, P("furnace", 2, 0, "right", NULL));
         for (int i = 0; i < k; i++) cJSON_AddItemToArray(ref, P("belt", 4 + i, 1, "right", NULL));
     } else if (which == 1) {   // powered processor
-        static const char *IO[4][2] = { { "egg", "mayo" }, { "milk", "cheese" }, { "wheat", "bread" }, { "tomato", "sauce" } };
-        int k = r(2), io = r(4);
+        // the processor's recipes (MACHINES.processor.recipes): anything else never turns into the goal
+        static const char *IO[3][2] = { { "egg", "mayo" }, { "wool", "yarn" }, { "tomato", "sauce" } };
+        int k = r(2), io = r(3);
         name = "Processor"; w = 5 + k > 6 ? 5 + k : 6; h = 3; hint = "The processor needs a solar panel within 3 tiles.";
         cJSON_AddItemToArray(fixed, P("chest", 0, 2, "right", src(IO[io][0], NULL)));
         cJSON_AddItemToArray(fixed, P("chest", 4 + k, 2, "right", goal(IO[io][1], 2)));
