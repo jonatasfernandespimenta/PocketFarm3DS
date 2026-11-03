@@ -114,7 +114,7 @@ line, Y changes the speed and B goes back.
 
 ## Build
 
-The game is a native C99 port of a web game (`../PocketFarmWeb`, which is the spec). The art comes from paid
+The game is a native C99 port of a web game I made. The art comes from paid
 asset packs whose licenses forbid redistributing them as assets, so **this repository has the code only**.
 Building it requires:
 
