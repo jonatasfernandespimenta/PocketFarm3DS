@@ -12,6 +12,8 @@ for (const f of mods) {
 // sprites.js keeps its pixel maps private: evaluate the file to get them
 const spr = readFileSync(resolve(root, 'src', 'sprites.js'), 'utf8').replace(/export /g, '');
 Object.assign(all, new Function(spr + '; return { SPRITE_PAL: PAL, SPRITES: MAPS };')());
+// 3DS-only furniture: the wardrobe opens the character screen (its art comes from romfs-3ds/, not the web assets)
+all.FURNITURE.wardrobe = { name: 'Wardrobe', src: 'assets/Cute_Fantasy/Buildings/House_Decor/Furniture_Other.png', rect: [32, 80, 32, 32], price: 300, comfort: 2, wardrobe: true };
 // English build: swap display strings (values only, never keys) using tools/en.json
 const en = JSON.parse(readFileSync(new URL('./en.json', import.meta.url), 'utf8'));
 const tr = v => typeof v === 'string' ? (Object.hasOwn(en, v) ? en[v] : v)

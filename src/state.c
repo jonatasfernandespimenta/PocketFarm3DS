@@ -10,7 +10,7 @@ J *newState(void) {
     J *s = cJSON_Parse("{\"v\":3,\"slot\":1,\"day\":1,\"time\":0,\"money\":200,\"energy\":0,\"map\":\"farm\",\"px\":null,\"py\":null,"
         "\"tool\":\"hoe\",\"seed\":\"carrot\",\"build\":null,\"tools\":{\"hoe\":1,\"can\":1,\"axe\":1,\"pickaxe\":1,\"rod\":0},"
         "\"inv\":{\"seed_carrot\":6,\"seed_radish\":3},\"soil\":{},\"removed\":{},\"stumps\":{},\"forage\":[],\"forageDay\":0,"
-        "\"flags\":{},\"tutorialDone\":false,\"house\":{\"level\":1,\"placed\":[{\"uid\":1,\"item\":\"bed_orange\",\"x\":2,\"y\":4},{\"uid\":2,\"item\":\"table\",\"x\":6,\"y\":5}]},"
+        "\"flags\":{},\"tutorialDone\":false,\"house\":{\"level\":1,\"placed\":[{\"uid\":1,\"item\":\"bed_orange\",\"x\":2,\"y\":4},{\"uid\":2,\"item\":\"table\",\"x\":6,\"y\":5},{\"uid\":3,\"item\":\"wardrobe\",\"x\":4,\"y\":4}]},"
         "\"decor\":{},\"projects\":{},\"friends\":{},\"discounts\":{},\"quests\":{\"done\":{}},\"critters\":{},\"tokens\":0,\"tickets\":0,"
         "\"lastCapsuleDay\":0,\"mascot\":null,\"buildings\":{},\"upgrades\":{},\"animals\":[],\"machines\":[],\"rep\":{\"local\":0,\"business\":0},"
         "\"contracts\":{\"day\":0,\"offers\":[],\"active\":[]},\"tax\":{\"amount\":0,\"due\":0},\"mineLevel\":1,\"mineDeepest\":1,"
@@ -44,15 +44,22 @@ static J *merge(J *a, J *b) {
     return a;
 }
 
+// Saves from before the character screen (no "look") get a wardrobe to place. Runs once: the next save has "look".
+static J *giveWardrobe(J *m, bool legacy) {
+    if (legacy) { J *decor = child(m, "decor"); setnum(decor, "wardrobe", num(decor, "wardrobe") + 1); }
+    return m;
+}
+
 J *loadState(void) {
     J *s = readKey("pocketfarm.v1");
     int v = num(s, "v");
+    bool legacy = s && !jget(s, "look");
     if (v == VERSION) {
         J *n = newState(), *stats = merge(cJSON_Duplicate(jget(n, "stats"), true), jget(s, "stats"));
         merge(n, s);
         cJSON_ReplaceItemInObjectCaseSensitive(n, "stats", stats);
         cJSON_Delete(s);
-        return n;
+        return giveWardrobe(n, legacy);
     }
     // Older saves: keep money, items, critters, upgrades… but the farm map was redrawn, so field, cleared
     // objects and placed machines (refunded) start over.
@@ -71,7 +78,7 @@ J *loadState(void) {
         cJSON_ReplaceItemInObjectCaseSensitive(m, "py", cJSON_CreateNull());
         setbool(m, "tutorialDone", (num(s, "day") ? num(s, "day") : 1) > 3);
         cJSON_Delete(s);
-        return m;
+        return giveWardrobe(m, legacy);
     }
     cJSON_Delete(s);
     return newState();

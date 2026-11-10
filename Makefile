@@ -18,6 +18,8 @@ all: $(TARGET).3dsx
 romfs: FORCE
 	@mkdir -p build/romfs
 	@rsync -a --delete --exclude 'Cute_Fantasy/read_me.txt' $(WEB)/assets build/romfs/
+	@[ -f romfs-3ds/assets/Cute_Fantasy/Buildings/House_Decor/Furniture_Other.png ] || { echo "romfs-3ds/assets/Cute_Fantasy/Buildings/House_Decor/Furniture_Other.png is missing: extract Cute_Fantasy/Buildings/House_Decor/Furniture_Other.png from the Cute_Fantasy pack (Cute_Fantasy.zip) to that path"; exit 1; }
+	@rsync -a romfs-3ds/ build/romfs/
 	@node tools/dump.mjs $(WEB) build/romfs/data.json
 	@arch -arm64 python3 tools/font.py build/romfs 2>/dev/null || python3 tools/font.py build/romfs   # make may run under Rosetta; PIL is arm64
 	@$(MAKE) --no-print-directory build/pf && [ build/romfs/terrain/farm-spring.png -nt $(WEB)/assets/maps/farm.json ] || ./build/pf --bake build/romfs

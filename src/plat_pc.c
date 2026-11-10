@@ -12,6 +12,7 @@
 Input in;
 static Img top = { 400, 240 }, bot = { 320, 240 };
 static double clockMs;
+static const char *sdmcRoot = "build/sdmc";   // --look-test points it at a scratch folder, never the real saves
 
 Img *cv_screen(int which) { return which ? &bot : &top; }
 void gpu_image(Img *im, float sx, float sy, float sw, float sh, float dx, float dy, float dw, float dh, const float m[6], float alpha, int op, uint32_t tint) {}
@@ -23,7 +24,7 @@ const char *plat_path(const char *path) {
     static char out[4][512]; static int k;
     char *o = out[k++ & 3];
     if (!strncmp(path, "romfs:/", 7)) snprintf(o, 512, "build/romfs/%s", path + 7);
-    else if (!strncmp(path, "sdmc:/", 6)) snprintf(o, 512, "build/sdmc/%s", path + 6);
+    else if (!strncmp(path, "sdmc:/", 6)) snprintf(o, 512, "%s/%s", sdmcRoot, path + 6);
     else snprintf(o, 512, "%s", path);
     return o;
 }
@@ -132,6 +133,20 @@ static int lookTest(void) {
         if (p) { char f[160]; snprintf(f, sizeof f, "romfs:/assets/Cute_Fantasy/Player/%s", p); assert(readFile(f, NULL)); }
     }
     lookSet(l, LOOK_HAIR, -1); assert(lookIndex(l, LOOK_HAIR) == 29);   // wraps backwards
+    // wardrobe: a fresh farm has one placed; an old save (no "look") gets one in its furniture, once
+    J *fresh = newState();
+    int found = 0; JFOR(p, jget(jget(fresh, "house"), "placed")) found += !strcmp(str(p, "item"), "wardrobe");
+    assert(found == 1 && jget(table("FURNITURE"), "wardrobe"));
+    sdmcRoot = "build/look-test-sdmc";
+    mkdir(sdmcRoot, 0777); mkdir("build/look-test-sdmc/3ds", 0777); mkdir("build/look-test-sdmc/3ds/PocketFarm", 0777);
+    cJSON_DeleteItemFromObjectCaseSensitive(fresh, "look");
+    char *txt = cJSON_PrintUnformatted(fresh);
+    assert(writeFile("sdmc:/3ds/PocketFarm/pocketfarm.v1.json", txt, strlen(txt)));
+    J *legacy = loadState();
+    assert(num(jget(legacy, "decor"), "wardrobe") == 1 && !strcmp(str(jget(legacy, "look"), "hair"), "Head/Hair_1/Hair_1_Brown.png"));
+    saveState(legacy, 0);
+    J *again = loadState();
+    assert(num(jget(again, "decor"), "wardrobe") == 1);
     puts("look-test ok");
     return 0;
 }

@@ -114,7 +114,7 @@ const char *lookLabel(J *look, int row) {
 #define ROW_Y 32
 #define ROW_H 26
 static const char *const ROW_NAMES[LOOK_ROWS] = { "Skin", "Hair", "Shirt", "Pants", "Shoes", "Hat" };
-static struct { J *snapshot; bool newFarmer; int sel; } W;   // sel == LOOK_ROWS: the confirm button
+static struct { J *snapshot; bool newFarmer, opening; int sel; } W;   // sel == LOOK_ROWS: the confirm button
 
 static void nine(const char *src, int x, int y, int w, int h, int l, int t, int r, int b) {
     Img *im = I(src);
@@ -158,16 +158,13 @@ static void finish(bool keep) {
     cJSON_Delete(W.snapshot); W.snapshot = NULL;
 }
 
-static bool wardrobeFrame(double dt) {
-    (void)dt;
-    J *look = child(state, "look");
-    // input
+// returns false when the screen closed
+static bool wardrobeInput(int bx, int by, int bw) {
     if (in.down & BTN_UP) { W.sel = (W.sel + LOOK_ROWS) % (LOOK_ROWS + 1); sfx("click"); }
     if (in.down & BTN_DOWN) { W.sel = (W.sel + 1) % (LOOK_ROWS + 1); sfx("click"); }
     if (W.sel < LOOK_ROWS && in.down & BTN_LEFT) cycle(W.sel, -1);
     if (W.sel < LOOK_ROWS && in.down & BTN_RIGHT) cycle(W.sel, 1);
     if (in.down & BTN_B && !W.newFarmer) { sfx("click"); finish(false); return false; }
-    int bw = 120, bx = SW - 8 - bw, by = 208;
     if ((in.down & BTN_A) || tapped(bx, by, bw, 24)) { sfx("click"); finish(true); return false; }
     for (int i = 0; i < LOOK_ROWS; i++) {
         int y = ROW_Y + i * ROW_H;
@@ -175,6 +172,15 @@ static bool wardrobeFrame(double dt) {
         else if (tapped(SW - 48, y, 40, ROW_H - 2)) { W.sel = i; cycle(i, 1); }
         else if (tapped(8, y, SW - 16, ROW_H - 2)) W.sel = i;
     }
+    return true;
+}
+
+static bool wardrobeFrame(double dt) {
+    (void)dt;
+    J *look = child(state, "look");
+    int bw = 120, bx = SW - 8 - bw, by = 208;
+    if (W.opening) W.opening = false;   // the A that opened the wardrobe is still down this frame: it would confirm right away
+    else if (!wardrobeInput(bx, by, bw)) return false;
 
     // top screen: the farmer turning, over the dimmed world (drawn before hud_frame)
     cv_target(cv_screen(0));
@@ -219,6 +225,7 @@ void wardrobe_open(bool newFarmer) {
     W.snapshot = cJSON_Duplicate(child(state, "look"), true);
     W.newFarmer = newFarmer;
     W.sel = 0;
+    W.opening = true;
     hud_closeMenu();
     hud_setOverlay(wardrobeFrame);
 }

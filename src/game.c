@@ -408,6 +408,7 @@ static void interact(Tile t) {
         Prop *r = th.p;
         if (eq(r->kind, "house")) { goTo("house", false, 0, 0); return; }
         if (eq(r->kind, "bed")) { askSleep(); return; }
+        if (eq(r->kind, "wardrobe")) { wardrobe_open(false); return; }
         if (eq(r->kind, "critter")) {
             if (nbubbles < 16) bubbles[nbubbles++] = (Bubble){ (r->x + 0.5) * 16, r->foot - 26, 1.2, "heart" };
             sfx("pop");

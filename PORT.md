@@ -15,6 +15,8 @@ Target: New 3DS (an original 3DS also runs it: ~21 MB heap + ~16 MB textures on 
 - `tools/dump.mjs`: imports the web modules in node and writes `romfs/data.json` (every exported table,
   functions dropped). Tables are read at runtime with cJSON, so they stay 1:1 with the web build.
   Function-valued fields (GOALS.check, QUESTS.progress, tutorial STEPS) are ported by hand, keyed by id.
+- `romfs-3ds/` (gitignored): 3DS-only assets, copied over `build/romfs` by `make romfs`. The wardrobe sheet
+  (`assets/Cute_Fantasy/Buildings/House_Decor/Furniture_Other.png`) comes from the Cute_Fantasy pack.
 - `oracle/`: the QuickJS build that runs the untouched web JS (`make oracle` → `build/oracle`). Too slow
   for the 3DS, but its PPM output is the reference for pixel comparisons.
 

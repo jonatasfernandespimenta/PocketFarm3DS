@@ -44,7 +44,7 @@ const char *furnitureType(const char *item) {
         J *r = jget(f, "rect");
         if (r) for (int i = 0; i < 4; i++) d->rect[i] = numv(jat(r, i));
         else { d->rect[2] = img->w; d->rect[3] = img->h; }
-        strcpy(d->kind, has(f, "bed") ? "bed" : "furniture");
+        strcpy(d->kind, has(f, "bed") ? "bed" : has(f, "wardrobe") ? "wardrobe" : "furniture");
         strcpy(d->mask, has(f, "flat") ? "none" : "base");
         d->flat = has(f, "flat");
         d->frames = num(f, "frames");
