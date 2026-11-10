@@ -92,6 +92,11 @@ void paintTerrain(char **trows, int th, int tseed, const char *seasonId, Img **g
     for (int y = 0; y < H; y++) { if (strchr(rows[y], 'w')) masked = true; if (strchr(rows[y], 'c')) cave = true; }
     PW = W * 16; PH = H * 16;
     Img *img = img_new(PW, PH), *mask = masked ? img_new(PW, PH) : NULL;
+    if (!img || (masked && !mask)) {   // out of memory: no ground this visit rather than a crash
+        img_free(img); img_free(mask);
+        *ground = *maskOut = NULL;
+        return;
+    }
     out = img->px;
     kind = calloc(PW * PH, 1);   // 1 = grass-ish, 2 = dirt, 3 = cave, 4 = water, 5 = rock
 

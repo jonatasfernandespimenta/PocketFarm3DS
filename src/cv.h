@@ -10,6 +10,7 @@ typedef struct Img {
     void *gpu;          // 3DS: uploaded texture chunks, refreshed when dirty
     bool dirty;
     bool screen;        // a 3DS screen: drawn with the GPU
+    bool gpuOnly;       // 3DS: px is freed once uploaded and the texture is never evicted (set px again to redraw)
 } Img;
 
 enum { OP_OVER, OP_LIGHTER, OP_MULTIPLY, OP_ATOP, OP_DST_IN };

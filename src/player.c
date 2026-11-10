@@ -52,6 +52,7 @@ static void drawLayer(const char *rel) {
 }
 
 void buildPlayerSheet(Img *dst, J *look) {
+    if (!dst->px && !(dst->px = malloc((size_t)dst->w * dst->h * 4))) return;   // freed after upload on the 3DS
     memset(dst->px, 0, (size_t)dst->w * dst->h * 4);
     cv_push_target(dst);
     drawLayer("Player_Base/Player_Base_animations.png");
@@ -70,7 +71,7 @@ void rebuildPlayerSprites(void) { buildPlayerSheet(body, jget(state, "look")); }
 Img *playerSheet(void) { return body; }
 
 void loadPlayerSprites(void) {
-    if (!body) body = img_new(576, 3584);
+    if (!body) { body = img_new(576, 3584); body->gpuOnly = true; }   // 8 MB of heap back once it's on the GPU
     rebuildPlayerSprites();
     tools = I(P "Tools/Iron/Iron_Tools.png");
     rod = I(P "Tools/Fishing_Rod/Wooden_Fishing_Rod.png");

@@ -17,8 +17,10 @@ static Cached *cache; static int ncache;
 
 Img *img_new(int w, int h) {
     Img *im = calloc(1, sizeof *im);
+    if (!im) return NULL;
     im->w = w; im->h = h;
     im->px = calloc((size_t)w * h, 4);
+    if (!im->px) { free(im); return NULL; }   // out of memory: callers skip what they would have drawn
     im->dirty = true;
     return im;
 }
@@ -100,7 +102,7 @@ void cv_tint(uint32_t rgba) { st.tint = rgba; }
 void cv_image(Img *im, float sx, float sy, float sw, float sh, float dx, float dy, float dw, float dh) {
     if (!im || sw <= 0 || sh <= 0 || dw == 0 || dh == 0) return;
     if (target->screen) gpu_image(im, sx, sy, sw, sh, dx, dy, dw, dh, st.m, st.alpha, st.op, st.tint);
-    else soft_image(target, im, sx, sy, sw, sh, dx, dy, dw, dh, st.m, st.alpha, st.op, st.tint);
+    else if (im->px) soft_image(target, im, sx, sy, sw, sh, dx, dy, dw, dh, st.m, st.alpha, st.op, st.tint);
 }
 void cv_draw(Img *im, float dx, float dy) { if (im) cv_image(im, 0, 0, im->w, im->h, dx, dy, im->w, im->h); }
 void cv_fill(float x, float y, float w, float h, uint32_t rgba) {

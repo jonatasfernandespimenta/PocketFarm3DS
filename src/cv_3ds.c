@@ -29,7 +29,7 @@ static void destroy(Chunks *cs) {
 // Drop every texture not drawn this frame; returns whether anything was freed.
 static bool evict(void) {
     bool any = false;
-    for (Chunks *cs = live, *nx; cs; cs = nx) { nx = cs->next; if (cs->used < frameNo) { cs->owner->gpu = NULL; unlink(cs); destroy(cs); any = true; } }
+    for (Chunks *cs = live, *nx; cs; cs = nx) { nx = cs->next; if (cs->used < frameNo && !cs->owner->gpuOnly) { cs->owner->gpu = NULL; unlink(cs); destroy(cs); any = true; } }
     return any;
 }
 
@@ -57,12 +57,18 @@ static void upload(Img *im) {
     if (old) {   // same image, new pixels (light map, edited canvases, the player sheet): rewrite the textures in place
         bool same = true;   // ...unless a chunk skipped as empty now has pixels: it needs a texture, so start over
         for (int i = 0; i < old->n && same; i++) same = !old->c[i].empty || blank(im, old->c[i].x, old->c[i].y, old->c[i].w, old->c[i].h);
-        if (same) { for (int i = 0; i < old->n; i++) if (!old->c[i].empty) swizzle(im, &old->c[i]); im->dirty = false; return; }
+        if (same) {
+            for (int i = 0; i < old->n; i++) if (!old->c[i].empty) swizzle(im, &old->c[i]);
+            im->dirty = false;
+            if (im->gpuOnly) { free(im->px); im->px = NULL; }
+            return;
+        }
     }
     gpu_free(im);
     int xs[16], ys[16], nx = split(im->w, xs), ny = split(im->h, ys);
     Chunks *cs = calloc(1, sizeof *cs + nx * ny * sizeof(Chunk));
     int y0 = 0;
+    bool failed = false;
     for (int j = 0; j < ny; j++) {
         int x0 = 0;
         for (int i = 0; i < nx; i++) {
@@ -75,7 +81,7 @@ static void upload(Img *im) {
             if (!ok) {   // still out of linear memory: draw nothing rather than garbage
                 static int warned;
                 if (warned++ < 8) plog("tex alloc failed %dx%d (image %dx%d), linear free %lu KB, textures %lu KB", c->w, c->h, im->w, im->h, (unsigned long)linearSpaceFree() / 1024, texBytes / 1024);
-                c->empty = true; x0 += xs[i]; continue;
+                c->empty = true; failed = true; x0 += xs[i]; continue;
             }
             texBytes += c->w * c->h * 4;
             C3D_TexSetFilter(&c->tex, GPU_NEAREST, GPU_NEAREST);
@@ -89,6 +95,7 @@ static void upload(Img *im) {
     cs->next = live; if (live) live->prev = cs; live = cs;
     im->gpu = cs;
     im->dirty = false;
+    if (im->gpuOnly && !failed) { free(im->px); im->px = NULL; }   // keep px if a chunk is missing: the next upload retries
 }
 
 static void swizzle(Img *im, Chunk *c) {
