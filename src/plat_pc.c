@@ -1,5 +1,7 @@
 // Desktop harness: headless, fixed 60 Hz clock, scripted buttons, PPM shots of both screens.
 //   pf <frames> [shot-every] [frame:button-mask(hex):hold-frames ...]
+#include <assert.h>
+#include <string.h>
 #include <stdarg.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -86,7 +88,45 @@ static int bake(const char *root) {
     return 0;
 }
 
+// pf --look-test: skin recolor + the sheet built from the save's look
+static int lookTest(void) {
+    DATA = cJSON_Parse(readFile("romfs:/data.json", NULL));
+    state = newState();
+    Img *t = img_new(4, 1);
+    uint8_t src[16] = { 246,202,159,255,  233,188,149,128,  210,159,112,255,  14,7,27,255 };
+    memcpy(t->px, src, 16);
+    recolorSkin(t, 3);
+    assert(t->px[0] == 196 && t->px[1] == 134 && t->px[2] == 88);
+    assert(t->px[4] == (196+156)/2 && t->px[5] == (134+100)/2 && t->px[6] == (88+62)/2 && t->px[7] == 128);
+    assert(t->px[8] == 156 && t->px[9] == 100 && t->px[10] == 62);
+    assert(t->px[12] == 14 && t->px[13] == 7 && t->px[14] == 27);
+    memcpy(t->px, src, 16);
+    recolorSkin(t, 1);   // tone 1 and out-of-range tones are the identity
+    assert(!memcmp(t->px, src, 16));
+    recolorSkin(t, 9);
+    assert(!memcmp(t->px, src, 16));
+    // default look reproduces the old fixed 6-layer sheet byte for byte
+    const char *old[] = { "Player_Base/Player_Base_animations.png", "Feet/Shoes_1_Brown.png", "Legs/Farmer_Pants/Farmer_Pants_1_Blue.png",
+        "Chest/Farmer_Shirt/Farmer_Shirt_1_White_and_Brown.png", "Hands/Hands_1_Bare.png", "Head/Hair_1/Hair_1_Brown.png" };
+    Img *a = img_new(576, 3584), *b = img_new(576, 3584);
+    cv_push_target(b);
+    for (int i = 0; i < 6; i++) {
+        char p[256]; snprintf(p, sizeof p, "romfs:/assets/Cute_Fantasy/Player/%s", old[i]);
+        Img *l = img_decode(p); assert(l); cv_draw(l, 0, 0); img_free(l);
+    }
+    cv_pop_target();
+    buildPlayerSheet(a, jget(state, "look"));
+    assert(!memcmp(a->px, b->px, 576 * 3584 * 4));
+    // missing layer: skipped, no crash
+    J *bad = cJSON_Duplicate(jget(state, "look"), true); setstr(bad, "hair", "Head/Nope.png");
+    buildPlayerSheet(a, bad);
+    assert(memcmp(a->px, b->px, 576 * 3584 * 4));
+    puts("look-test ok");
+    return 0;
+}
+
 int main(int argc, char **argv) {
+    if (argc > 1 && !strcmp(argv[1], "--look-test")) return lookTest();
     if (argc > 2 && !strcmp(argv[1], "--bake")) return bake(argv[2]);
     // pf --factory <state.json> <steps> [seed]: run the factory sim, print the state (tools/factest.mjs diffs it with the JS)
     if (argc > 3 && !strcmp(argv[1], "--factory")) {

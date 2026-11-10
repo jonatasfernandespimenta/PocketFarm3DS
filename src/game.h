@@ -121,6 +121,9 @@ typedef struct ActOpts { int row, frames; double dur; int overlay, ovRow; double
 
 extern Player player;
 void loadPlayerSprites(void);
+void rebuildPlayerSprites(void);
+void buildPlayerSheet(Img *dst, J *look);
+void recolorSkin(Img *im, int tone);
 void startAction(Player *p, ActOpts o, Thunk *onHit);
 ActOpts actDefaults(void);
 double updatePlayer(Player *p, double dt, double dx, double dy, bool (*blocked)(Rect));

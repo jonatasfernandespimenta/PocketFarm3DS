@@ -2195,6 +2195,7 @@ void game_reload(void) {
     hud_closeMenu();
     cJSON_Delete(state);
     state = loadState();
+    rebuildPlayerSprites();
     setMuted(has(state, "muted"));
     npopups = 0;   // ponytail: queued popups belong to the old farm (a pending quest-done tree leaks)
     fishing.on = false; transitioning = false; nbubbles = 0; simAcc = 0;

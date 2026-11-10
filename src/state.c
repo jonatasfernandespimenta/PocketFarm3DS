@@ -16,7 +16,9 @@ J *newState(void) {
         "\"contracts\":{\"day\":0,\"offers\":[],\"active\":[]},\"tax\":{\"amount\":0,\"due\":0},\"mineLevel\":1,\"mineDeepest\":1,"
         "\"stats\":{\"earned\":0,\"harvested\":0,\"cleared\":0,\"contracts\":0,\"fished\":0,\"smelted\":0,\"foraged\":0},"
         "\"goals\":{},\"freeWaterDay\":0,\"trades\":{\"pending\":{},\"used\":[]},\"muted\":false,\"farmName\":\"\",\"workshop\":{},"
-        "\"daily\":null,\"friendsList\":{},\"blueprints\":[],\"blueprint\":null,\"giftDay\":\"\",\"farmTech\":{},\"industry\":0,\"overflow\":{}}");
+        "\"daily\":null,\"friendsList\":{},\"blueprints\":[],\"blueprint\":null,\"giftDay\":\"\",\"farmTech\":{},\"industry\":0,\"overflow\":{},"
+        "\"look\":{\"skin\":1,\"feet\":\"Feet/Shoes_1_Brown.png\",\"legs\":\"Legs/Farmer_Pants/Farmer_Pants_1_Blue.png\","
+        "\"chest\":\"Chest/Farmer_Shirt/Farmer_Shirt_1_White_and_Brown.png\",\"hair\":\"Head/Hair_1/Hair_1_Brown.png\",\"hat\":null}}");
     setnum(s, "time", num(DATA, "DAY_START"));
     setnum(s, "energy", num(DATA, "BASE_ENERGY"));
     setnum(s, "bag", BAG_SLOTS);

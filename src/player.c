@@ -3,15 +3,6 @@
 #include "game.h"
 
 #define P "assets/Cute_Fantasy/Player/"
-// Draw order matters: body first, hair last.
-static const char *LAYERS[] = {
-    P "Player_Base/Player_Base_animations.png",
-    P "Feet/Shoes_1_Brown.png",
-    P "Legs/Farmer_Pants/Farmer_Pants_1_Blue.png",
-    P "Chest/Farmer_Shirt/Farmer_Shirt_1_White_and_Brown.png",
-    P "Hands/Hands_1_Bare.png",
-    P "Head/Hair_1/Hair_1_Brown.png",
-};
 // Sheet rows: 0-2 idle, 3-5 walk (down, side, up; side faces right). Tool rows start at TOOLS[x].anim.
 static const int DIR_INDEX[4] = { [DOWN] = 0, [RIGHT] = 1, [LEFT] = 1, [UP] = 2 };
 #define FRAME 64
@@ -23,19 +14,63 @@ static const int DIR_INDEX[4] = { [DOWN] = 0, [RIGHT] = 1, [LEFT] = 1, [UP] = 2 
 Player player;
 static Img *body, *tools, *rod;
 
-// ponytail: the six layers are composited once into one sheet (same pixels as drawing them in order every
-// frame: source-over is associative), which saves 5 draws per frame and five 8 MB textures on the 3DS.
-// The layers are decoded uncached and freed right after: kept in I()'s cache they were 47 MB of dead heap.
-void loadPlayerSprites(void) {
-    char path[256];
-    for (int i = 0; i < 6; i++) {
-        snprintf(path, sizeof path, "romfs:/%s", LAYERS[i]);
-        Img *l = img_decode(path);
-        if (!body) { body = img_new(l->w, l->h); cv_push_target(body); }
-        cv_draw(l, 0, 0);
-        img_free(l);
+// Skin tones 1..5: {light, shadow} targets for the base sprite's skin colors (the mid shade maps to their average).
+static const uint8_t SKIN_SRC[3][3] = { { 246, 202, 159 }, { 233, 188, 149 }, { 210, 159, 112 } };
+static const uint8_t SKIN_TO[5][2][3] = {
+    { { 246, 202, 159 }, { 210, 159, 112 } }, { { 226, 168, 118 }, { 184, 126, 82 } }, { { 196, 134, 88 }, { 156, 100, 62 } },
+    { { 156, 102, 66 }, { 120, 76, 48 } },    { { 120, 78, 52 }, { 90, 56, 38 } },
+};
+
+// Exact-RGB recolor of the three skin shades, alpha untouched. Tone 1 (and anything out of range) is the identity.
+void recolorSkin(Img *im, int tone) {
+    if (tone <= 1 || tone > 5) return;
+    uint8_t to[3][3];
+    for (int c = 0; c < 3; c++) {
+        to[0][c] = SKIN_TO[tone - 1][0][c];
+        to[2][c] = SKIN_TO[tone - 1][1][c];
+        to[1][c] = (to[0][c] + to[2][c]) / 2;
     }
+    for (int i = 0, n = im->w * im->h; i < n; i++) {
+        uint8_t *p = im->px + i * 4;
+        for (int k = 0; k < 3; k++)
+            if (p[0] == SKIN_SRC[k][0] && p[1] == SKIN_SRC[k][1] && p[2] == SKIN_SRC[k][2]) { memcpy(p, to[k], 3); break; }
+    }
+    im->dirty = true;
+}
+
+// ponytail: the layers are composited into one sheet (same pixels as drawing them in order every frame: source-over
+// is associative), which saves a draw per layer per frame and a texture per layer on the 3DS. Rebuilt in place.
+// The layers are decoded uncached and freed right after: kept in I()'s cache they were 47 MB of dead heap.
+static void drawLayer(const char *rel) {
+    if (!rel) return;
+    char path[256];
+    snprintf(path, sizeof path, "romfs:/" P "%s", rel);
+    Img *l = img_decode(path);
+    if (!l) return;
+    cv_draw(l, 0, 0);
+    img_free(l);
+}
+
+void buildPlayerSheet(Img *dst, J *look) {
+    memset(dst->px, 0, (size_t)dst->w * dst->h * 4);
+    cv_push_target(dst);
+    drawLayer("Player_Base/Player_Base_animations.png");
+    drawLayer(str(look, "feet"));
+    drawLayer(str(look, "legs"));
+    drawLayer(str(look, "chest"));
+    drawLayer("Hands/Hands_1_Bare.png");
+    drawLayer(str(look, "hair"));
+    drawLayer(str(look, "hat"));
     cv_pop_target();
+    recolorSkin(dst, (int)num(look, "skin"));
+    dst->dirty = true;
+}
+
+void rebuildPlayerSprites(void) { buildPlayerSheet(body, jget(state, "look")); }
+
+void loadPlayerSprites(void) {
+    if (!body) body = img_new(576, 3584);
+    rebuildPlayerSprites();
     tools = I(P "Tools/Iron/Iron_Tools.png");
     rod = I(P "Tools/Fishing_Rod/Wooden_Fishing_Rod.png");
 }
