@@ -130,6 +130,8 @@ int lookCount(int row);
 int lookIndex(J *look, int row);                   // 0 when the stored value isn't in the catalog
 void lookSet(J *look, int row, int index);         // index wraps modulo lookCount
 const char *lookLabel(J *look, int row);           // static buffer
+void wardrobe_open(bool newFarmer);                // the character screen (overlay): "New farmer" or "Wardrobe"
+Img *playerSheet(void);                            // player.c: the combined player sheet
 void startAction(Player *p, ActOpts o, Thunk *onHit);
 ActOpts actDefaults(void);
 double updatePlayer(Player *p, double dt, double dx, double dy, bool (*blocked)(Rect));

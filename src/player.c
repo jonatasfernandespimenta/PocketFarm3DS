@@ -67,6 +67,7 @@ void buildPlayerSheet(Img *dst, J *look) {
 }
 
 void rebuildPlayerSprites(void) { buildPlayerSheet(body, jget(state, "look")); }
+Img *playerSheet(void) { return body; }
 
 void loadPlayerSprites(void) {
     if (!body) body = img_new(576, 3584);

@@ -175,6 +175,9 @@ int main(int argc, char **argv) {
         prev = held;
         // PF_GACHA=1: open the capsule machine with money right away (profiling the gacha scene)
         if (fr == 60 && getenv("PF_GACHA")) { setnum(state, "money", 99999); gacha_open(NULL); }
+        // PF_WARDROBE=1: A on the title at frame 30 (it covers overlays), then the wardrobe screen at frame 60
+        if (fr == 30 && getenv("PF_WARDROBE")) in.down |= BTN_A;
+        if (fr == 60 && getenv("PF_WARDROBE")) wardrobe_open(false);
         clock_gettime(CLOCK_MONOTONIC, &a);
         game_frame(1 / 60.0);
         clock_gettime(CLOCK_MONOTONIC, &b);

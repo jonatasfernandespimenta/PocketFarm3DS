@@ -103,3 +103,122 @@ const char *lookLabel(J *look, int row) {
     else snprintf(buf, sizeof buf, "%s", color);
     return buf;
 }
+
+// ---------- the character screen (Layout B) ----------
+// Bottom: one row per slot (◀ value ▶) + the confirm button; top: the farmer front, side and back at 3x.
+// D-pad up/down picks a row (the button is the last one), left/right or the drawn arrows cycle, A/tap confirms,
+// B reverts to the look it opened with (the wardrobe only: a new farmer has to pick).
+#define SW 320
+#define INK 0x3f2832ff
+#define CREAM 0xfff3dcff
+#define ROW_Y 32
+#define ROW_H 26
+static const char *const ROW_NAMES[LOOK_ROWS] = { "Skin", "Hair", "Shirt", "Pants", "Shoes", "Hat" };
+static struct { J *snapshot; bool newFarmer; int sel; } W;   // sel == LOOK_ROWS: the confirm button
+
+static void nine(const char *src, int x, int y, int w, int h, int l, int t, int r, int b) {
+    Img *im = I(src);
+    int iw = im->w, ih = im->h, mw = iw - l - r, mh = ih - t - b;
+    cv_image(im, 0, 0, l, t, x, y, l, t);
+    cv_image(im, l, 0, mw, t, x + l, y, w - l - r, t);
+    cv_image(im, iw - r, 0, r, t, x + w - r, y, r, t);
+    cv_image(im, 0, t, l, mh, x, y + t, l, h - t - b);
+    cv_image(im, l, t, mw, mh, x + l, y + t, w - l - r, h - t - b);
+    cv_image(im, iw - r, t, r, mh, x + w - r, y + t, r, h - t - b);
+    cv_image(im, 0, ih - b, l, b, x, y + h - b, l, b);
+    cv_image(im, l, ih - b, mw, b, x + l, y + h - b, w - l - r, b);
+    cv_image(im, iw - r, ih - b, r, b, x + w - r, y + h - b, r, b);
+}
+static bool tapped(int x, int y, int w, int h) { return in.touchDown && in.tx >= x && in.tx < x + w && in.ty >= y && in.ty < y + h; }
+// The fonts have no ◀ ▶: a 6x11 triangle pointing left (dir < 0) or right.
+static void arrow(int x, int y, int dir, uint32_t c) {
+    for (int r = 0; r < 11; r++) {
+        int w = 6 - abs(r - 5);
+        cv_fill(dir < 0 ? x + 6 - w : x, y + r, w, 1, c);
+    }
+}
+
+static void cycle(int row, int d) {
+    J *look = child(state, "look");
+    lookSet(look, row, lookIndex(look, row) + d);
+    rebuildPlayerSprites();
+    sfx("click");
+}
+
+static void finish(bool keep) {
+    if (keep) {
+        if (W.newFarmer) delkey(state, "lookPending");
+        changed(); persist();
+    } else {
+        delkey(state, "look");
+        cJSON_AddItemToObject(state, "look", W.snapshot);   // the state owns it now
+        W.snapshot = NULL;
+        rebuildPlayerSprites();
+    }
+    cJSON_Delete(W.snapshot); W.snapshot = NULL;
+}
+
+static bool wardrobeFrame(double dt) {
+    (void)dt;
+    J *look = child(state, "look");
+    // input
+    if (in.down & BTN_UP) { W.sel = (W.sel + LOOK_ROWS) % (LOOK_ROWS + 1); sfx("click"); }
+    if (in.down & BTN_DOWN) { W.sel = (W.sel + 1) % (LOOK_ROWS + 1); sfx("click"); }
+    if (W.sel < LOOK_ROWS && in.down & BTN_LEFT) cycle(W.sel, -1);
+    if (W.sel < LOOK_ROWS && in.down & BTN_RIGHT) cycle(W.sel, 1);
+    if (in.down & BTN_B && !W.newFarmer) { sfx("click"); finish(false); return false; }
+    int bw = 120, bx = SW - 8 - bw, by = 208;
+    if ((in.down & BTN_A) || tapped(bx, by, bw, 24)) { sfx("click"); finish(true); return false; }
+    for (int i = 0; i < LOOK_ROWS; i++) {
+        int y = ROW_Y + i * ROW_H;
+        if (tapped(100, y, 40, ROW_H - 2)) { W.sel = i; cycle(i, -1); }
+        else if (tapped(SW - 48, y, 40, ROW_H - 2)) { W.sel = i; cycle(i, 1); }
+        else if (tapped(8, y, SW - 16, ROW_H - 2)) W.sel = i;
+    }
+
+    // top screen: the farmer turning, over the dimmed world (drawn before hud_frame)
+    cv_target(cv_screen(0));
+    const char *title = W.newFarmer ? "New farmer" : "Wardrobe";
+    cv_fill(0, 0, 400, 240, 0x19141ebb);
+    nine("assets/ui/btn.png", 8, 8, text_width("px", title) + 16, 24, 5, 5, 5, 8);
+    text_draw("px", title, 16, 11, INK, 0);
+    Img *sheet = playerSheet();
+    for (int r = 0; r < 3; r++) {   // idle rows: front, side, back (frame 0, 64x64), 3x nearest-neighbor
+        int cx = 200 + (r - 1) * 120;   // the farmer fills about x 26-38, y 20-40 of the frame: centered on (cx, 120)
+        nine("assets/ui/paper-small.png", cx - 48, 64, 96, 112, 4, 4, 4, 4);
+        cv_image(sheet, 0, r * 64, 64, 64, cx - 96, 30, 192, 192);
+    }
+    cv_target(cv_screen(1));
+
+    // bottom screen
+    cv_fill(0, 0, SW, 240, 0x193c3eff);
+    for (int y = 0; y < 240; y += 8) for (int x = (y / 8) % 2 * 8; x < SW; x += 16) cv_fill(x, y, 8, 8, 0x1d4446ff);
+    nine("assets/ui/btn.png", 4, 2, SW - 8, 24, 5, 5, 5, 8);
+    text_draw("px", title, (SW - text_width("px", title)) / 2, 5, INK, 0);
+    for (int i = 0; i < LOOK_ROWS; i++) {
+        int y = ROW_Y + i * ROW_H, h = ROW_H - 2;
+        if (i == W.sel) nine("assets/ui/btn-gold-down.png", 8, y, SW - 16, h, 5, 5, 5, 5);
+        else nine("assets/ui/paper-small.png", 8, y, SW - 16, h, 4, 4, 4, 4);
+        text_draw("px", ROW_NAMES[i], 16, y + 3, INK, 0);
+        arrow(112, y + 6, -1, INK);
+        arrow(SW - 30, y + 6, 1, INK);
+        const char *v = lookLabel(look, i);
+        int cx = (124 + SW - 36) / 2;
+        text_draw("px", v, cx - text_width("px", v) / 2, y + 3, INK, 0);
+    }
+    const char *ok = W.newFarmer ? "Start farming" : "Done";
+    if (W.sel == LOOK_ROWS) nine("assets/ui/btn-gold-down.png", bx - 3, by - 3, bw + 6, 30, 5, 5, 5, 5);
+    nine("assets/ui/btn-red.png", bx, by, bw, 24, 5, 5, 5, 8);
+    text_draw("px", ok, bx + (bw - text_width("px", ok)) / 2, by + 3, CREAM, 0);
+    if (!W.newFarmer) text_draw("small", "B: cancel", 12, by + 6, 0xb9a58aff, 0);
+    return true;
+}
+
+void wardrobe_open(bool newFarmer) {
+    cJSON_Delete(W.snapshot);
+    W.snapshot = cJSON_Duplicate(child(state, "look"), true);
+    W.newFarmer = newFarmer;
+    W.sel = 0;
+    hud_closeMenu();
+    hud_setOverlay(wardrobeFrame);
+}
