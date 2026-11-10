@@ -49,8 +49,8 @@ festivals: Flower Festival, Lake Luau, Harvest Festival and Winter Fair.
 - A Nintendo 3DS of any model. A New 3DS / New 3DS XL / New 2DS XL is recommended. The original 3DS/2DS
   runs it too, but so far that has only been tested in the Azahar emulator, which doesn't emulate its slower CPU.
 - Custom firmware (Luma3DS) with the Homebrew Launcher or FBI. See [3ds.hacks.guide](https://3ds.hacks.guide).
-- For sound: a DSP dump at `sdmc:/3ds/dspfirm.cdc`. Run the **DSP1** homebrew once to create it. Without it
-  the game runs silently and says so on screen.
+- For sound: a one-time setup, see [Getting sound to work](#getting-sound-to-work). Without it the game runs
+  silently and says so on screen.
 
 ## Install
 
@@ -111,9 +111,27 @@ line, Y changes the speed and B goes back.
 - Saves use the same format as the web version, so you can move a farm between the two.
 - Trade and score codes are shown as text and typed in with the keyboard. There's no QR or camera on the 3DS.
 
+## Getting sound to work
+
+Homebrew games can't play sound until the console's sound firmware has been copied to the SD card. You only
+do this once, and it fixes sound for every homebrew game, not just PocketFarm.
+
+1. In **FBI**, open **Remote Install → Scan QR Code** and scan this code. It installs **DSP1**.
+
+   ![QR code: DSP1.cia](https://api.qrserver.com/v1/create-qr-code/?size=250x250&data=https%3A%2F%2Fgithub.com%2Fzoogie%2FDSP1%2Freleases%2Flatest%2Fdownload%2FDSP1.cia)
+
+   No camera or Wi-Fi? Download `DSP1.cia` from the [DSP1 releases](https://github.com/zoogie/DSP1/releases/latest),
+   copy it to the SD card and install it with FBI like any other CIA.
+2. Start **DSP1** from the HOME menu and wait for it to say it's done. It creates `sdmc:/3ds/dspfirm.cdc`.
+3. Press **START** to exit, then open PocketFarm. The sound now works.
+
+You can delete DSP1 afterwards. Keep the `dspfirm.cdc` file it made.
+
 ## Troubleshooting
 
-- **No sound:** `sdmc:/3ds/dspfirm.cdc` is missing. Run DSP1 once.
+- **No sound and the game says `dspfirm.cdc is missing`:** follow [Getting sound to work](#getting-sound-to-work).
+- **No sound, but the file is there:** check the volume slider on the side of the console, and make sure
+  Sound and Music aren't switched off in PocketFarm's menu.
 - **Slow on an original 3DS:** its CPU is about a third as fast as the New 3DS. The timing info below shows where the time goes.
 - **Timing info:** create an empty file `sdmc:/3ds/PocketFarm/debug`, and the game writes per-frame timings
   to `log.txt` in the same folder.
