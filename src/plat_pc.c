@@ -147,6 +147,9 @@ static int lookTest(void) {
     saveState(legacy, 0);
     J *again = loadState();
     assert(num(jget(again, "decor"), "wardrobe") == 1);
+    remove("build/look-test-sdmc/3ds/PocketFarm/pocketfarm.v1.json");
+    assert(has(loadState(), "lookPending"));                 // first launch
+    J *o = newState(); assert(!has(o, "lookPending"));        // never in the template
     puts("look-test ok");
     return 0;
 }

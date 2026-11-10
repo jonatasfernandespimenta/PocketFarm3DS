@@ -22,8 +22,8 @@ Target: New 3DS (an original 3DS also runs it: ~21 MB heap + ~16 MB textures on 
 
 ## State
 
-`state` stays a cJSON tree with the exact JSON shape of `newState()` (save files stay compatible with the
-web build). Runtime-only things (player, world, props, NPCs, fx) are C structs.
+`state` stays a cJSON tree with the exact JSON shape of `newState()` (plus `look`; 3DS saves with a wardrobe no
+longer load in the web game). Runtime-only things (player, world, props, NPCs, fx) are C structs.
 
 ## Screens
 
@@ -43,7 +43,7 @@ UI (HUD, hotbar, menus, album), touch.
 | quests.c, tutorial.c, trade.c (codes byte-compatible with web), workshop.c, bench.c | done |
 | sfx.c, music.c, audio.c (software synth, ndsp on a second core) | done |
 
-Known differences from the web (by design): no QR/camera/clipboard (codes shown as text, typed with the keyboard); saves export/import via sdmc:/3ds/PocketFarm/*.json (import reads import.json); no tap-to-walk (top screen isn't touchable); decorating uses the tile in
+Known differences from the web (by design): character customization and the wardrobe (3DS only); no QR/camera/clipboard (codes shown as text, typed with the keyboard); saves export/import via sdmc:/3ds/PocketFarm/*.json (import reads import.json); no tap-to-walk (top screen isn't touchable); decorating uses the tile in
 front of the player; water reflections lack the 2px sine wobble; buttons: A act, B menu/back, Y/X/L/R tools 1-4,
 START+SELECT quits.
 

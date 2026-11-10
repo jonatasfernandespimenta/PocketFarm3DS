@@ -50,6 +50,10 @@ static J *giveWardrobe(J *m, bool legacy) {
     return m;
 }
 
+// A fresh farm starts on the "New farmer" screen. Only fresh-farm paths set this, never newState():
+// merge(newState(), s) would copy it into every old save.
+static J *freshFarm(void) { J *n = newState(); setbool(n, "lookPending", true); return n; }
+
 J *loadState(void) {
     J *s = readKey("pocketfarm.v1");
     int v = num(s, "v");
@@ -81,7 +85,7 @@ J *loadState(void) {
         return giveWardrobe(m, legacy);
     }
     cJSON_Delete(s);
-    return newState();
+    return freshFarm();
 }
 
 // The running game lives in KEY; every save also goes to its slot, so the 3 slots are 3 separate farms.
@@ -103,7 +107,7 @@ J *slotInfo(int n) {
 // Make slot n the running game (a fresh farm if it is empty). The caller restarts the game.
 void useSlot(int n) {
     J *s = slotInfo(n);
-    if (!s) { s = newState(); setnum(s, "slot", n); }
+    if (!s) { s = freshFarm(); setnum(s, "slot", n); }
     writeKey("pocketfarm.v1", s);
     cJSON_Delete(s);
 }
@@ -112,7 +116,7 @@ void deleteSlot(int n) { char k[32]; snprintf(k, sizeof k, "pocketfarm.slot.%d",
 
 // "Novo jogo": a fresh farm in the same slot.
 void resetSlot(int slot) {
-    J *s = newState(); setnum(s, "slot", slot);
+    J *s = freshFarm(); setnum(s, "slot", slot);
     writeKey("pocketfarm.v1", s);
     cJSON_Delete(s);
     deleteSlot(slot);

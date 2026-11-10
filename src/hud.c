@@ -798,6 +798,7 @@ void hud_frame(double dt) {
     // bottom screen
     cv_target(cv_screen(1));
     if (titleUp) { titleUp = title_frame(dt); return; }
+    if (!overlay && !menuOpen && has(state, "lookPending")) wardrobe_open(true);
     if (overlay) { if (!overlay(dt)) overlay = NULL; return; }
     drawHud();
     hud_menuFrame(dt);
