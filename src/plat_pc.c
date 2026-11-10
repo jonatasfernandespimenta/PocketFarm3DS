@@ -141,14 +141,16 @@ static int lookTest(void) {
     mkdir(sdmcRoot, 0777); mkdir("build/look-test-sdmc/3ds", 0777); mkdir("build/look-test-sdmc/3ds/PocketFarm", 0777);
     cJSON_DeleteItemFromObjectCaseSensitive(fresh, "look");
     char *txt = cJSON_PrintUnformatted(fresh);
-    assert(writeFile("sdmc:/3ds/PocketFarm/pocketfarm.v1.json", txt, strlen(txt)));
+    bool wrote = writeFile("sdmc:/3ds/PocketFarm/pocketfarm.v1.json", txt, strlen(txt));
+    assert(wrote); (void)wrote;
     J *legacy = loadState();
     assert(num(jget(legacy, "decor"), "wardrobe") == 1 && !strcmp(str(jget(legacy, "look"), "hair"), "Head/Hair_1/Hair_1_Brown.png"));
     saveState(legacy, 0);
     J *again = loadState();
     assert(num(jget(again, "decor"), "wardrobe") == 1);
     remove("build/look-test-sdmc/3ds/PocketFarm/pocketfarm.v1.json");
-    assert(has(loadState(), "lookPending"));                 // first launch
+    J *first = loadState();
+    assert(has(first, "lookPending")); (void)first;          // first launch
     J *o = newState(); assert(!has(o, "lookPending"));        // never in the template
     puts("look-test ok");
     return 0;

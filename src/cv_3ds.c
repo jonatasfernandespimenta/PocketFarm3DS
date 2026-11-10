@@ -44,13 +44,20 @@ static int split(int n, int *out) {   // n → power-of-two pieces (≤ 1024, �
     return k;
 }
 
+// Whether the image's pixels under a chunk (clipped to the image) are all fully transparent.
+static bool blank(Img *im, int x0, int y0, int w, int h) {
+    int vw = im->w - x0 < w ? im->w - x0 : w, vh = im->h - y0 < h ? im->h - y0 : h;
+    for (int y = 0; y < vh; y++) for (int x = 0; x < vw; x++) if (im->px[((y0 + y) * im->w + x0 + x) * 4 + 3]) return false;
+    return true;
+}
+
 static void swizzle(Img *im, Chunk *c);
 static void upload(Img *im) {
     Chunks *old = im->gpu;
-    if (old) {   // same image, new pixels (light map, edited canvases): rewrite the textures in place
-        bool same = true;
-        for (int i = 0; i < old->n; i++) same &= !old->c[i].empty;
-        if (same) { for (int i = 0; i < old->n; i++) swizzle(im, &old->c[i]); im->dirty = false; return; }
+    if (old) {   // same image, new pixels (light map, edited canvases, the player sheet): rewrite the textures in place
+        bool same = true;   // ...unless a chunk skipped as empty now has pixels: it needs a texture, so start over
+        for (int i = 0; i < old->n && same; i++) same = !old->c[i].empty || blank(im, old->c[i].x, old->c[i].y, old->c[i].w, old->c[i].h);
+        if (same) { for (int i = 0; i < old->n; i++) if (!old->c[i].empty) swizzle(im, &old->c[i]); im->dirty = false; return; }
     }
     gpu_free(im);
     int xs[16], ys[16], nx = split(im->w, xs), ny = split(im->h, ys);
@@ -61,10 +68,7 @@ static void upload(Img *im) {
         for (int i = 0; i < nx; i++) {
             Chunk *c = &cs->c[cs->n++];
             c->x = x0; c->y = y0; c->w = xs[i]; c->h = ys[j];
-            int vw = im->w - x0 < c->w ? im->w - x0 : c->w, vh = im->h - y0 < c->h ? im->h - y0 : c->h;
-            bool any = false;
-            for (int y = 0; y < vh && !any; y++) for (int x = 0; x < vw; x++) if (im->px[((y0 + y) * im->w + x0 + x) * 4 + 3]) { any = true; break; }
-            c->empty = !any;
+            c->empty = blank(im, x0, y0, c->w, c->h);
             if (c->empty) { x0 += xs[i]; continue; }
             bool ok = C3D_TexInit(&c->tex, c->w, c->h, GPU_RGBA8);
             if (!ok && evict()) ok = C3D_TexInit(&c->tex, c->w, c->h, GPU_RGBA8);

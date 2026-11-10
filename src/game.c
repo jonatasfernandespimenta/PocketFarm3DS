@@ -2194,6 +2194,9 @@ double game_machineY(J *st, J *m) { return machineY(st, m); }
 // location.reload() after switching / resetting a save: drop the running farm and boot the one now in KEY.
 void game_reload(void) {
     hud_closeMenu();
+    // the old map goes first: the sheet rebuild's PNG decodes (~16 MB transient) must not stack on a big farm
+    freeWorld();
+    world = NULL;   // freeWorld leaves it set: enterMap would free the map again
     cJSON_Delete(state);
     state = loadState();
     rebuildPlayerSprites();
