@@ -124,6 +124,12 @@ void loadPlayerSprites(void);
 void rebuildPlayerSprites(void);
 void buildPlayerSheet(Img *dst, J *look);
 void recolorSkin(Img *im, int tone);
+// Wardrobe catalog (wardrobe.c): the only source of look paths. Rows in screen order.
+enum { LOOK_SKIN, LOOK_HAIR, LOOK_SHIRT, LOOK_PANTS, LOOK_SHOES, LOOK_HAT, LOOK_ROWS };
+int lookCount(int row);
+int lookIndex(J *look, int row);                   // 0 when the stored value isn't in the catalog
+void lookSet(J *look, int row, int index);         // index wraps modulo lookCount
+const char *lookLabel(J *look, int row);           // static buffer
 void startAction(Player *p, ActOpts o, Thunk *onHit);
 ActOpts actDefaults(void);
 double updatePlayer(Player *p, double dt, double dx, double dy, bool (*blocked)(Rect));

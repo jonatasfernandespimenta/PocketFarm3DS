@@ -121,6 +121,17 @@ static int lookTest(void) {
     J *bad = cJSON_Duplicate(jget(state, "look"), true); setstr(bad, "hair", "Head/Nope.png");
     buildPlayerSheet(a, bad);
     assert(memcmp(a->px, b->px, 576 * 3584 * 4));
+    // catalog: counts, labels, every choice is real art and round-trips
+    J *l = jget(state, "look");
+    assert(lookCount(LOOK_SKIN) == 5 && lookCount(LOOK_HAIR) == 30 && lookCount(LOOK_SHOES) == 9 && lookCount(LOOK_HAT) == 2);
+    assert(lookCount(LOOK_SHIRT) == 8 + 9 + 8 + 7 + 8 && lookCount(LOOK_PANTS) == 8 + 8 + 7 + 8);
+    assert(!strcmp(lookLabel(l, LOOK_SHIRT), "Farmer \xc2\xb7 White and Brown"));
+    for (int r = 0; r < LOOK_ROWS; r++) for (int i = 0; i < lookCount(r); i++) {
+        lookSet(l, r, i); assert(lookIndex(l, r) == i);
+        const char *p = r == LOOK_SKIN ? NULL : str(l, (const char *[]){ 0, "hair", "chest", "legs", "feet", "hat" }[r]);
+        if (p) { char f[160]; snprintf(f, sizeof f, "romfs:/assets/Cute_Fantasy/Player/%s", p); assert(readFile(f, NULL)); }
+    }
+    lookSet(l, LOOK_HAIR, -1); assert(lookIndex(l, LOOK_HAIR) == 29);   // wraps backwards
     puts("look-test ok");
     return 0;
 }
