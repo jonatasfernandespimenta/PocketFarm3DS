@@ -17,9 +17,16 @@ int cropStage(J *tile) {
 bool isReady(J *tile) { return tile && str(tile, "crop") && cropStage(tile) == 3; }
 
 // Night: watered crops grow one day, all soil dries (sprinklers re-water after this).
+// Tilled soil left empty for 2 nights goes back to grass (the soil entry is dropped; the map's ground shows again).
 void sleepCrops(J *st) {
-    JFOR(tile, jget(st, "soil")) {
-        if (str(tile, "crop") && has(tile, "wet")) setnum(tile, "age", num(tile, "age") + 1);
+    J *soil = jget(st, "soil");
+    for (J *tile = soil ? soil->child : NULL, *next; tile; tile = next) {
+        next = tile->next;
+        if (str(tile, "crop")) {
+            delkey(tile, "idle");
+            if (has(tile, "wet")) setnum(tile, "age", num(tile, "age") + 1);
+        } else if (num(tile, "idle") + 1 >= 2) { cJSON_Delete(cJSON_DetachItemViaPointer(soil, tile)); continue; }
+        else setnum(tile, "idle", num(tile, "idle") + 1);
         setbool(tile, "wet", false);
     }
 }
